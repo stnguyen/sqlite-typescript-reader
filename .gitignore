@@ -1,6 +1,9 @@
 # Database files used for testing
 *.db
+*.sqlite
 
 node_modules/
 
 .vscode
+
+.DS_Store

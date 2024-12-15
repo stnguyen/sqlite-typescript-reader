@@ -74,3 +74,9 @@ download them by running this script:
 If the script doesn't work for some reason, you can download the databases
 directly from
 [codecrafters-io/sample-sqlite-databases](https://github.com/codecrafters-io/sample-sqlite-databases).
+
+
+# Test Databases
+
+- `sample.db`
+- [Chinook_Sqlite v1.4.5](https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sqlite)
