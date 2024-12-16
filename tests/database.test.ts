@@ -11,13 +11,19 @@ describe("sample.db", async () => {
         db.close();
     })
 
-    test("parse page 1 header", async () => {
+    test("read page 1", async () => {
         const db = await Database.open(DB_PATH);
-        const p1Header = await db.parsePageHeader(1);
+        const p1 = await db.readPage(1);
 
-        expect(p1Header).toBeObject();
-        expect(p1Header.pageType).toEqual(PageType.LeafTable);
+        expect(p1).toBeObject();
+        expect(p1.header.pageType).toEqual(PageType.LeafTable);
 
+        db.close();
+    })
+    
+    test("count tables", async () => {
+        const db = await Database.open(DB_PATH);
+        expect(await db.countTables()).toEqual(3);
         db.close();
     })
 })
@@ -25,13 +31,19 @@ describe("sample.db", async () => {
 describe("Chinook_Sqlite.sqlite", async () => {
     const DB_PATH = "tests/Chinook_Sqlite.sqlite";
 
-    test("parse page 1 header", async () => {
+    test("read page 1", async () => {
         const db = await Database.open(DB_PATH);
-        const p1Header = await db.parsePageHeader(1);
+        const p1 = await db.readPage(1);
 
-        expect(p1Header).toBeObject();
-        expect(p1Header.pageType).toEqual(PageType.InteriorTable);
+        expect(p1).toBeObject();
+        expect(p1.header.pageType).toEqual(PageType.InteriorTable);
 
+        db.close();
+    })
+
+    test("count tables", async () => {
+        const db = await Database.open(DB_PATH);
+        expect(await db.countTables()).toEqual(11);
         db.close();
     })
 })
