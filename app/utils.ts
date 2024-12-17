@@ -12,12 +12,10 @@ export function readVarInt(dataView: DataView, offset: number): [number, number]
     let value = 0;
     for (let i = 0; i < 8; i++) {
         const byte = dataView.getUint8(offset + i);
-        console.debug(`byte: ${byte.toString(2)}`);
         if (i > 0) {
             value <<= 7;
         }
         value |= byte & mask;
-        console.debug(`value: ${value.toString(2)}`);
         
         if ((byte & msb) === 0) {
             return [value, offset + i + 1]
