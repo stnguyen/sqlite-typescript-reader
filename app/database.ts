@@ -1,6 +1,7 @@
 import { open } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { constants } from 'fs';
+import { decodeString, readVarInt } from './utils';
 
 interface DatabaseHeader {
     pageSize: number
@@ -130,20 +131,40 @@ export class Database {
             const page = await this.readPage(pageNumber);
             // console.debug(`_countTable(${pageNumber}) -> header `, page.header, ", startBody ", page.startBody);
 
-            // Each table is represeneted by 1 cell in sqlite_schema leaf pages
-            if (page.header.pageType === PageType.LeafTable) {
-                return page.header.numCells;
-            }
-        
-            // Is an interior page, recursively visit all children
             let numTables = 0;
-            for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const cellPointer = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                const leftChildPageNumber = page.dataView.getUint32(cellPointer);
-                console.log(cellPointer, leftChildPageNumber)
-                numTables += await _countTable(leftChildPageNumber);
+            if (page.header.pageType === PageType.LeafTable) {
+                // Each "table" row is represeneted by 1 cell in sqlite_schema leaf pages
+                // Read each cell:
+                //  - First varint is cell header size
+                //  - Second varint is type & size of the first column which is "type"
+
+                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                    const [ cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+                    const [ rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
+                    const [ payloadHeaderSize, typeColSerialTypeAddr ] = readVarInt(page.dataView, payloadAddr);
+                    const [ typeColSerialType, _ ] = readVarInt(page.dataView, typeColSerialTypeAddr);
+                    const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
+                    // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
+                    // Assume it's UTF-8 for now
+                    if (typeColSerialTypeWithSize.type !== SerialType.String) {
+                        throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
+                    }
+                    const firstColString = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                    if (firstColString === "table") {
+                        numTables += 1;
+                    }
+                }
+            } else {
+                // Is an interior page, recursively visit all children
+                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                    const leftChildPageNumber = page.dataView.getUint32(cellAddr);
+                    console.log(cellAddr, leftChildPageNumber)
+                    numTables += await _countTable(leftChildPageNumber);
+                }
+                numTables += await _countTable(page.header.rightMostPointer!);
             }
-            numTables += await _countTable(page.header.rightMostPointer!);
             return numTables;
         }
 

@@ -1,4 +1,6 @@
 
+const textDecoder = new TextDecoder();
+
 /**
  * Read a signed 64bit variable-length integer starting at offset.
  * TODO will fail for ints more than 53 bits
@@ -26,4 +28,8 @@ export function readVarInt(dataView: DataView, offset: number): [number, number]
     value <<= 8;
     value |= lastByte;
     return [value, offset + 9];
+}
+
+export function decodeString(dataView: DataView, offset: number, size: number): string {
+    return textDecoder.decode(dataView.buffer.slice(offset, offset + size));
 }
