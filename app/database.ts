@@ -126,6 +126,54 @@ export class Database {
         return { pageSize, numPages }
     }
 
+    async getTableNames(): Promise<string[]> {
+        const _getTableNames = async (pageNumber: number): Promise<string[]> => {
+            const page = await this.readPage(pageNumber);
+            // console.debug(`_countTable(${pageNumber}) -> header `, page.header, ", startBody ", page.startBody);
+
+            const tableNames = []
+            if (page.header.pageType === PageType.LeafTable) {
+                // Each "table" row is represeneted by 1 cell in sqlite_schema leaf pages
+                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                    const [ cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+                    const [ rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
+                    const [ payloadHeaderSize, typeColSerialTypeAddr ] = readVarInt(page.dataView, payloadAddr);
+                    const [ typeColSerialType, nameColSerialTypeAddr ] = readVarInt(page.dataView, typeColSerialTypeAddr);
+                    const [ nameColSerialType, _ ] = readVarInt(page.dataView, nameColSerialTypeAddr);
+                    const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
+                    if (typeColSerialTypeWithSize.type !== SerialType.String) {
+                        throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
+                    }
+                    const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                    if (type === "table") {
+                        const nameColSerialTypeAddrWithSize = parseSerialTypeCode(nameColSerialType);
+                        if (nameColSerialTypeAddrWithSize.type !== SerialType.String) {
+                            throw Error(`Invalid serial type for sqlite_schema.name column. Expected ${SerialType.String}, got ${nameColSerialTypeAddrWithSize.type}`);
+                        }
+                        // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
+                        // Assume it's UTF-8 for now
+                        const name = decodeString(page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size, nameColSerialTypeAddrWithSize.size);
+                        if (!name.startsWith("sqlite_")) {
+                            tableNames.push(name)
+                        }
+                    }
+                }
+            } else {
+                // Is an interior page, recursively visit all children
+                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                    const leftChildPageNumber = page.dataView.getUint32(cellAddr);
+                    tableNames.push(...(await _getTableNames(leftChildPageNumber)));
+                }
+                tableNames.push(...(await _getTableNames(page.header.rightMostPointer!)));
+            }
+            return tableNames;
+        }
+
+        return _getTableNames(1);
+    }
+
     async countTables(): Promise<number> {
         const _countTable = async (pageNumber: number) => {
             const page = await this.readPage(pageNumber);
@@ -134,10 +182,6 @@ export class Database {
             let numTables = 0;
             if (page.header.pageType === PageType.LeafTable) {
                 // Each "table" row is represeneted by 1 cell in sqlite_schema leaf pages
-                // Read each cell:
-                //  - First varint is cell header size
-                //  - Second varint is type & size of the first column which is "type"
-
                 for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
                     const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
                     const [ cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
@@ -145,13 +189,13 @@ export class Database {
                     const [ payloadHeaderSize, typeColSerialTypeAddr ] = readVarInt(page.dataView, payloadAddr);
                     const [ typeColSerialType, _ ] = readVarInt(page.dataView, typeColSerialTypeAddr);
                     const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                    // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
-                    // Assume it's UTF-8 for now
                     if (typeColSerialTypeWithSize.type !== SerialType.String) {
                         throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
                     }
-                    const firstColString = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
-                    if (firstColString === "table") {
+                    // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
+                    // Assume it's UTF-8 for now
+                    const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                    if (type === "table") {
                         numTables += 1;
                     }
                 }
@@ -160,7 +204,6 @@ export class Database {
                 for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
                     const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
                     const leftChildPageNumber = page.dataView.getUint32(cellAddr);
-                    console.log(cellAddr, leftChildPageNumber)
                     numTables += await _countTable(leftChildPageNumber);
                 }
                 numTables += await _countTable(page.header.rightMostPointer!);

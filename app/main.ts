@@ -10,6 +10,10 @@ if (command === ".dbinfo") {
     console.log(`database page size: ${db.header.pageSize}`);
     console.log(`number of tables: ${await db.countTables()}`)
     await db.close();
+} else if (command === ".tables") {
+    const db = await Database.open(databaseFilePath);
+    console.log((await db.getTableNames()).join("\t"));
+    await db.close();
 } else {
     throw new Error(`Unknown command ${command}`);
 }

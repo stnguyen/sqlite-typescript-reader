@@ -26,6 +26,13 @@ describe("sample.db", async () => {
         expect(await db.countTables()).toEqual(3);
         db.close();
     })
+
+    test("get table names", async () => {
+        const db = await Database.open(DB_PATH);
+        const names = await db.getTableNames();
+        expect(names).toEqual(["apples", "oranges"]);
+        db.close();
+    })
 })
 
 describe("Chinook_Sqlite.sqlite", async () => {
@@ -44,6 +51,16 @@ describe("Chinook_Sqlite.sqlite", async () => {
     test("count tables", async () => {
         const db = await Database.open(DB_PATH);
         expect(await db.countTables()).toEqual(11);
+        db.close();
+    })
+
+    test("get table names", async () => {
+        const db = await Database.open(DB_PATH);
+        const names = await db.getTableNames();
+        expect(names).toEqual([
+            "Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType", "Playlist",
+            "PlaylistTrack", "Track"
+          ]);
         db.close();
     })
 })
