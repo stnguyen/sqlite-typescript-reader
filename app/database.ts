@@ -14,6 +14,65 @@ export enum PageType {
     LeafTable = 13
 }
 
+export enum SerialType {
+    Null = 0,
+    Int8, Int16, Int24, Int32, Int48, Int64,
+    Float,
+    Const0, Const1,
+    Internal1, Internal2,
+    BLOB,
+    String
+}
+
+interface SerialTypeWithSize {
+    type: SerialType,
+    size: number
+}
+
+export function parseSerialTypeCode(code: number): SerialTypeWithSize {
+    let type: number;
+    if (code < SerialType.Internal1) {
+        type = code;
+    } else if (code >= 12 && code % 2 == 0) {
+        type = SerialType.BLOB;
+    } else if (code >= 13 && code % 2 == 1) {
+        type = SerialType.String;
+    } else {
+        throw Error(`Invalid serial type code: ${code}`)
+    }
+    
+    let size: number = -1;
+    switch (type) {
+        case SerialType.Null:
+        case SerialType.Const0:
+        case SerialType.Const1:
+            size = 0;
+            break;
+    
+        case SerialType.Int8:
+        case SerialType.Int16:
+        case SerialType.Int24:
+        case SerialType.Int32:
+            size = type;
+            break;
+
+        case SerialType.Int48:
+            size = 6;
+            break;
+
+        case SerialType.Int64:
+        case SerialType.Float:
+            size = 8;
+            break;
+        
+        case SerialType.BLOB:
+        case SerialType.String:
+            size = (code - type) / 2;
+            break;
+    }
+    return { type, size }
+}
+
 function isInteriorPage(pageType: PageType): boolean {
     return pageType === PageType.InteriorIndex || pageType === PageType.InteriorTable;
 }
