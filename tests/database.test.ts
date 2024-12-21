@@ -38,6 +38,25 @@ describe("sample.db", async () => {
       const db = await Database.open(DB_PATH);
       expect(await db.countTableRows("apples")).toEqual(4);
       expect(await db.countTableRows("oranges")).toEqual(6);
+
+      try {
+        await db.countTableRows("notExist");
+      } catch (error) {
+        expect((error as any).message).toEqual("No such schema: notExist")
+      }
+      db.close();
+    })
+
+    test("get single column values", async () => {
+      const db = await Database.open(DB_PATH);
+      const values = await db.getColumnValues("apples", "name");
+      expect(values.sort()).toEqual(["Fuji", "Golden Delicious", "Granny Smith", "Honeycrisp"]);
+      try {
+        await db.getColumnValues("apples", "notExist");
+      } catch (error) {
+        expect((error as any).message).toEqual("No such column: notExist")
+      }
+      db.close();
       db.close();
     })
 })
@@ -75,6 +94,13 @@ describe("Chinook_Sqlite.sqlite", async () => {
       const db = await Database.open(DB_PATH);
       expect(await db.countTableRows("Customer")).toEqual(59);
       expect(await db.countTableRows("Track")).toEqual(3503);
+      db.close();
+    })
+
+    test("get single column values", async () => {
+      const db = await Database.open(DB_PATH);
+      const values = await db.getColumnValues("Customer", "FirstName");
+      expect(values.sort()).toEqual(["Aaron", "Alexandre", "Astrid", "Bjørn", "Camille", "Daan", "Dan", "Diego", "Dominique", "Eduardo", "Edward", "Ellie", "Emma", "Enrique", "Fernanda", "Frank", "Frank", "František", "François", "Fynn", "Hannah", "Heather", "Helena", "Hugh", "Isabelle", "Jack", "Jennifer", "Joakim", "Johannes", "John", "João", "Julia", "Kara", "Kathy", "Ladislav", "Leonie", "Lucas", "Luis", "Luís", "Madalena", "Manoj", "Marc", "Mark", "Mark", "Martha", "Michelle", "Niklas", "Patrick", "Phil", "Puja", "Richard", "Robert", "Roberto", "Stanisław", "Steve", "Terhi", "Tim", "Victor", "Wyatt"]);
       db.close();
     })
 })

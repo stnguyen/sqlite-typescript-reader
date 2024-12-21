@@ -42,3 +42,27 @@ export function readVarInt(dataView: DataView, offset: number): [number, number]
 export function decodeString(dataView: DataView, offset: number, size: number): string {
     return textDecoder.decode(dataView.buffer.slice(offset, offset + size));
 }
+
+/**
+ * Export column names from a schema sql
+ */
+export function parseColumnsFromSchemaSQL(sql: string): string[] {
+    // TODO need a much better parser
+
+    // Sample SQL:
+    // CREATE TABLE apples
+    // (
+    //     id integer primary key autoincrement,
+    //     name text,
+    //     color text
+    // );
+    const regex = /CREATE TABLE \[?\w+\]?\s*\(\s*(?<columnDefinitions>(.+\s*)+)/;
+    const match = sql.trim().match(regex);
+    if (!match || !match.groups) {
+        throw new Error("Failed to parse SQL");
+    }
+    const { columnDefinitions } = match.groups as any;
+    const lines = (columnDefinitions as string).split(",").map(l => l.trim());
+    const constraintStartIdx = lines.findIndex(l => l.startsWith("CONSTRAINT"));
+    return lines.slice(0, constraintStartIdx > -1 ? constraintStartIdx : undefined).map(l => l.split(/\s+/)[0].replace("[", "").replace("]", ""));
+}

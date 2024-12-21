@@ -15,6 +15,18 @@ if (command === ".dbinfo") {
     const tableName = command.split("select count(*) from ")[1];
     console.log(await db.countTableRows(tableName))
 } else {
-    throw new Error(`Unknown command ${command}`);
+    const selectColRegex = /select\s+(?<columnName>\w+)\s+from\s+(?<tableName>\w+)/;
+    const match = command.match(selectColRegex);
+    if (match) {
+        const { columnName, tableName } = match.groups as any;
+        if (columnName === "count(*)") {
+            console.log(await db.countTableRows(tableName))
+        } else {
+            console.log((await db.getColumnValues(tableName, columnName)).join("\n"))
+        }
+    }
+    else {
+        throw new Error(`Unknown command ${command}`);
+    }
 }
 await db.close();

@@ -1,7 +1,7 @@
 import { open } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { constants } from 'fs';
-import { decodeString, readVarInt } from './utils';
+import { decodeString, parseColumnsFromSchemaSQL, readVarInt } from './utils';
 
 interface DatabaseHeader {
     pageSize: number
@@ -39,6 +39,14 @@ enum SqliteSchemaColumnIndices {
     tbl_name_2,
     rootpage_3,
     sql_4
+}
+
+interface Schema {
+    type: "table" | "index" | "view" | "view" | "trigger"
+    name: string,
+    tbl_name: string
+    rootPage: number
+    sql: string
 }
 
 export function parseSerialTypeCode(code: number): SerialTypeWithSize {
@@ -166,7 +174,7 @@ export class Database {
      * @param rootPageNumber root page number
      * @param leafTableReader callback to read each leaf table
      */
-    private async scanTable(rootPageNumber: number, leafTableReader: (page: Page) => void) {
+    private async scanTable(rootPageNumber: number, leafTableReader: (leafPage: Page) => void) {
         const _scanTablePage = async (pageNumber: number) => {
             const page = await this.readPage(pageNumber);
             // console.debug(`_countTable(${pageNumber}) -> header `, page.header, ", startBody ", page.startBody);
@@ -209,27 +217,27 @@ export class Database {
         return values;
     }
 
-    private async findTableRootPage(tableName: string): Promise<number> {
-        let tableRootPage: number | undefined;
-        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
-            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const [type, name, _, rootPage] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.rootpage_3) as [string, string, any, number];
-                if (type === "table" && name === tableName) {
-                    tableRootPage = rootPage;
+    private async readSchema(schemaName: string): Promise<Schema> {
+        let schema: Schema | undefined;
+        await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
+            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                const [type, name, tbl_name, rootPage, sql] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.sql_4) as [string, string, string, number, string];
+                if (schemaName === name) {
+                    schema = { type, name, tbl_name, rootPage, sql } as Schema;
                 }
             }
         })
-        if (!tableRootPage) {
-            throw new Error(`No such table: ${tableName}`);
+        if (!schema) {
+            throw new Error(`No such schema: ${schemaName}`);
         }
-        return tableRootPage;
+        return schema;
     }
 
     async getTableNames(): Promise<string[]> {
         const tableNames: string[] = []
-        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
-            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const [type, name] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1) as [string, string];
+        await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
+            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                const [type, name] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1) as [string, string];
                 if (type === "table" && !name.startsWith("sqlite_")) {
                     tableNames.push(name)
                 }
@@ -239,20 +247,39 @@ export class Database {
     }
 
     async countTableRows(tableName: string): Promise<number> {
-        const tableRootPage = await this.findTableRootPage(tableName);
+        const schema = await this.readSchema(tableName);
 
         let numRows = 0;
-        await this.scanTable(tableRootPage, (page: Page) => {
-            numRows += page.header.numCells;
+        await this.scanTable(schema.rootPage, (leafPage: Page) => {
+            numRows += leafPage.header.numCells;
         })
         return numRows;
     }
 
+    async getColumnValues(tableName: string, columnName: string): Promise<ColumnValue[]> {
+        const schema = await this.readSchema(tableName);
+        const columns = parseColumnsFromSchemaSQL(schema.sql);
+        const columnIndex = columns.indexOf(columnName)
+        if (columnIndex === -1) {
+            throw new Error(`No such column: ${columnName}`)
+        }
+
+        const values: ColumnValue[] = [];
+        await this.scanTable(schema.rootPage, (leafPage: Page) => {
+            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                const [value] = this.readColumns(leafPage, cellIdx, columnIndex);
+                values.push(value);
+            }
+        })
+
+        return values;
+    }
+
     async countTables(): Promise<number> {
         let numTables = 0;
-        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
-            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const [type] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0) as [string];
+        await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
+            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                const [type] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0) as [string];
                 if (type === "table") {
                     numTables += 1;
                 }
