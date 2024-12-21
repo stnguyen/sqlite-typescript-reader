@@ -30,6 +30,8 @@ interface SerialTypeWithSize {
     size: number
 }
 
+const FIRST_PAGE_NUMBER = 1;
+
 export function parseSerialTypeCode(code: number): SerialTypeWithSize {
     let type: number;
     if (code < SerialType.Internal1) {
@@ -41,7 +43,7 @@ export function parseSerialTypeCode(code: number): SerialTypeWithSize {
     } else {
         throw Error(`Invalid serial type code: ${code}`)
     }
-    
+
     let size: number = -1;
     switch (type) {
         case SerialType.Null:
@@ -49,7 +51,7 @@ export function parseSerialTypeCode(code: number): SerialTypeWithSize {
         case SerialType.Const1:
             size = 0;
             break;
-    
+
         case SerialType.Int8:
         case SerialType.Int16:
         case SerialType.Int24:
@@ -65,7 +67,7 @@ export function parseSerialTypeCode(code: number): SerialTypeWithSize {
         case SerialType.Float:
             size = 8;
             break;
-        
+
         case SerialType.BLOB:
         case SerialType.String:
             size = (code - type) / 2;
@@ -114,104 +116,100 @@ export class Database {
     private static async parseDatabaseHeader(fileHandle: FileHandle): Promise<DatabaseHeader> {
         const buffer: Uint8Array = new Uint8Array(100);
         await fileHandle.read(buffer, 0, buffer.length, 0);
-    
+
         // Ues a DataView to read/write data in a raw binary buffer
         const dataView = new DataView(buffer.buffer, 0, buffer.byteLength);
-        
+
         // The page size for a database file is determined by the 2-byte integer
         // located at an offset of 16 bytes from the beginning of the database file.
         const pageSize = dataView.getUint16(16);
-        
+
         const numPages = dataView.getUint32(28);
         return { pageSize, numPages }
     }
 
-    async getTableNames(): Promise<string[]> {
-        const _getTableNames = async (pageNumber: number): Promise<string[]> => {
+    /**
+     * Scan through leaf table pages
+     * @param rootPageNumber root page number
+     * @param leafTableReader callback to read each leaf table
+     */
+    private async scanTable(rootPageNumber: number, leafTableReader: (page: Page) => void) {
+        const _scanTablePage = async (pageNumber: number) => {
             const page = await this.readPage(pageNumber);
             // console.debug(`_countTable(${pageNumber}) -> header `, page.header, ", startBody ", page.startBody);
 
-            const tableNames = []
             if (page.header.pageType === PageType.LeafTable) {
-                // Each "table" row is represeneted by 1 cell in sqlite_schema leaf pages
-                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                    const [ cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
-                    const [ rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
-                    const [ payloadHeaderSize, typeColSerialTypeAddr ] = readVarInt(page.dataView, payloadAddr);
-                    const [ typeColSerialType, nameColSerialTypeAddr ] = readVarInt(page.dataView, typeColSerialTypeAddr);
-                    const [ nameColSerialType, _ ] = readVarInt(page.dataView, nameColSerialTypeAddr);
-                    const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                    if (typeColSerialTypeWithSize.type !== SerialType.String) {
-                        throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
-                    }
-                    const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
-                    if (type === "table") {
-                        const nameColSerialTypeAddrWithSize = parseSerialTypeCode(nameColSerialType);
-                        if (nameColSerialTypeAddrWithSize.type !== SerialType.String) {
-                            throw Error(`Invalid serial type for sqlite_schema.name column. Expected ${SerialType.String}, got ${nameColSerialTypeAddrWithSize.type}`);
-                        }
-                        // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
-                        // Assume it's UTF-8 for now
-                        const name = decodeString(page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size, nameColSerialTypeAddrWithSize.size);
-                        if (!name.startsWith("sqlite_")) {
-                            tableNames.push(name)
-                        }
-                    }
-                }
-            } else {
-                // Is an interior page, recursively visit all children
-                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                leafTableReader(page)
+            } else if (page.header.pageType === PageType.InteriorTable) {
+                for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
                     const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
                     const leftChildPageNumber = page.dataView.getUint32(cellAddr);
-                    tableNames.push(...(await _getTableNames(leftChildPageNumber)));
+                    await _scanTablePage(leftChildPageNumber);
                 }
-                tableNames.push(...(await _getTableNames(page.header.rightMostPointer!)));
+                await _scanTablePage(page.header.rightMostPointer!);
+            } else {
+                throw new Error(`Invalid page type encountered: page ${pageNumber} is of type ${page.header.pageType}, expected a table page`);
             }
-            return tableNames;
         }
 
-        return _getTableNames(1);
+        return _scanTablePage(rootPageNumber);
     }
 
-    async countTables(): Promise<number> {
-        const _countTable = async (pageNumber: number) => {
-            const page = await this.readPage(pageNumber);
-            // console.debug(`_countTable(${pageNumber}) -> header `, page.header, ", startBody ", page.startBody);
-
-            let numTables = 0;
-            if (page.header.pageType === PageType.LeafTable) {
-                // Each "table" row is represeneted by 1 cell in sqlite_schema leaf pages
-                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                    const [ cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
-                    const [ rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
-                    const [ payloadHeaderSize, typeColSerialTypeAddr ] = readVarInt(page.dataView, payloadAddr);
-                    const [ typeColSerialType, _ ] = readVarInt(page.dataView, typeColSerialTypeAddr);
-                    const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                    if (typeColSerialTypeWithSize.type !== SerialType.String) {
-                        throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
+    async getTableNames(): Promise<string[]> {
+        const tableNames: string[] = []
+        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
+            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+                const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
+                const [payloadHeaderSize, typeColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
+                const [typeColSerialType, nameColSerialTypeAddr] = readVarInt(page.dataView, typeColSerialTypeAddr);
+                const [nameColSerialType, _] = readVarInt(page.dataView, nameColSerialTypeAddr);
+                const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
+                if (typeColSerialTypeWithSize.type !== SerialType.String) {
+                    throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
+                }
+                const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                if (type === "table") {
+                    const nameColSerialTypeAddrWithSize = parseSerialTypeCode(nameColSerialType);
+                    if (nameColSerialTypeAddrWithSize.type !== SerialType.String) {
+                        throw Error(`Invalid serial type for sqlite_schema.name column. Expected ${SerialType.String}, got ${nameColSerialTypeAddrWithSize.type}`);
                     }
                     // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
                     // Assume it's UTF-8 for now
-                    const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
-                    if (type === "table") {
-                        numTables += 1;
+                    const name = decodeString(page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size, nameColSerialTypeAddrWithSize.size);
+                    if (!name.startsWith("sqlite_")) {
+                        tableNames.push(name)
                     }
                 }
-            } else {
-                // Is an interior page, recursively visit all children
-                for(let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                    const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                    const leftChildPageNumber = page.dataView.getUint32(cellAddr);
-                    numTables += await _countTable(leftChildPageNumber);
-                }
-                numTables += await _countTable(page.header.rightMostPointer!);
             }
-            return numTables;
-        }
+        })
+        return tableNames;
+    }
 
-        return _countTable(1);
+    async countTables(): Promise<number> {
+        let numTables = 0;
+        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
+            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+                const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+                const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
+                const [payloadHeaderSize, typeColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
+                const [typeColSerialType, _] = readVarInt(page.dataView, typeColSerialTypeAddr);
+                const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
+                if (typeColSerialTypeWithSize.type !== SerialType.String) {
+                    throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
+                }
+                // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
+                // Assume it's UTF-8 for now
+                const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                if (type === "table") {
+                    numTables += 1;
+                }
+            }
+        });
+
+        return numTables;
     }
 
     async readPage(pageNumber: number): Promise<Page> {
@@ -228,7 +226,7 @@ export class Database {
         if (!(pageType in PageType)) {
             throw new TypeError(`Unknown page type: ${pageType}`);
         }
-        
+
         const startFreeBlock = dataView.getUint16(1 + pageType);
         const numCells = dataView.getUint16(3 + byteOffset);
         const startCellConcentArea = dataView.getUint16(5 + byteOffset);
