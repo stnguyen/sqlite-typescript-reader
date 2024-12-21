@@ -25,6 +25,8 @@ export enum SerialType {
     String
 }
 
+type ColumnValue = null | number | string;
+
 interface SerialTypeWithSize {
     type: SerialType,
     size: number
@@ -32,11 +34,11 @@ interface SerialTypeWithSize {
 
 const FIRST_PAGE_NUMBER = 1;
 enum SqliteSchemaColumnIndices {
-    type = 0,
-    name,
-    tbl_name,
-    rootpage,
-    sql
+    type_0 = 0,
+    name_1,
+    tbl_name_2,
+    rootpage_3,
+    sql_4
 }
 
 export function parseSerialTypeCode(code: number): SerialTypeWithSize {
@@ -89,6 +91,30 @@ function isInteriorPage(pageType: PageType): boolean {
 
 function isTablePage(pageType: PageType): boolean {
     return pageType === PageType.InteriorTable || pageType == PageType.LeafTable;
+}
+
+function readColumnValeus(serialTypeWithSize: SerialTypeWithSize, dataView: DataView, byteOffset: number): ColumnValue {
+    switch (serialTypeWithSize.type) {
+        case SerialType.Null:
+            return null;
+        case SerialType.Const0:
+            return 0;
+        case SerialType.Const1:
+            return 1;
+        case SerialType.Int8:
+            return dataView.getInt8(byteOffset);
+        case SerialType.Int16:
+            return dataView.getInt16(byteOffset);
+        case SerialType.Int32:
+            return dataView.getInt32(byteOffset);
+        case SerialType.Float:
+            return dataView.getFloat64(byteOffset);
+        case SerialType.String:
+            return decodeString(dataView, byteOffset, serialTypeWithSize.size);
+
+        default:
+            throw new Error(`Not implemented: reading column value of type ${serialTypeWithSize.type}`);
+    }
 }
 
 interface PageHeader {
@@ -162,7 +188,7 @@ export class Database {
         return _scanTablePage(rootPageNumber);
     }
 
-    private readColumn(page: Page, cellIdx: number, colIdx: number): number | string | null {
+    private readColumns(page: Page, cellIdx: number, fromColIdx: number, toColIdx?: number): ColumnValue[] {
         const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
         const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
         const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
@@ -170,47 +196,26 @@ export class Database {
         let colSerialTypeAddr = firstColSerialTypeAddr;
         let byteOffset = payloadAddr + payloadHeaderSize;
         let serialTypeWithSize: SerialTypeWithSize | undefined;
-        for (let i = 0; i <= colIdx; i++) {
+        const values = []
+        for (let i = 0; i <= (toColIdx || fromColIdx); i++) {
             const result = readVarInt(page.dataView, colSerialTypeAddr);
             serialTypeWithSize = parseSerialTypeCode(result[0]);
-            if (i < colIdx) {
-                byteOffset += serialTypeWithSize.size;
-                colSerialTypeAddr = result[1];
+            if (i >= fromColIdx) {
+                values.push(readColumnValeus(serialTypeWithSize, page.dataView, byteOffset));
             }
+            byteOffset += serialTypeWithSize.size;
+            colSerialTypeAddr = result[1];
         }
-        switch (serialTypeWithSize!.type) {
-            case SerialType.Null:
-                return null;
-            case SerialType.Const0:
-                return 0;
-            case SerialType.Const1:
-                return 1;
-            case SerialType.Int8:
-                return page.dataView.getInt8(byteOffset);
-            case SerialType.Int16:
-                return page.dataView.getInt16(byteOffset);
-            case SerialType.Int32:
-                return page.dataView.getInt32(byteOffset);
-            case SerialType.Float:
-                return page.dataView.getFloat64(byteOffset);
-            case SerialType.String:
-                return decodeString(page.dataView, byteOffset, serialTypeWithSize!.size);
-    
-            default:
-                throw new Error(`Not implemented: reading column value of type ${serialTypeWithSize!.type}`);
-        }
+        return values;
     }
 
     async getTableNames(): Promise<string[]> {
         const tableNames: string[] = []
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
-                if (type === "table") {
-                    const name = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.name) as string;
-                    if (!name.startsWith("sqlite_")) {
-                        tableNames.push(name)
-                    }
+                const [type, name] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1) as [string, string];
+                if (type === "table" && !name.startsWith("sqlite_")) {
+                    tableNames.push(name)
                 }
             }
         })
@@ -221,13 +226,9 @@ export class Database {
         let tableRootPage: number | undefined;
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
-                if (type === "table") {
-                    const name = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.name) as string;
-                    if (name === tableName) {
-                        tableRootPage = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.rootpage) as number;
-                        break;
-                    }
+                const [type, name, _, rootpage] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.rootpage_3) as [string, string, any, number];
+                if (type === "table" && name === tableName) {
+                    tableRootPage = rootpage;
                 }
             }
         })
@@ -246,7 +247,7 @@ export class Database {
         let numTables = 0;
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
+                const [type] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0) as [string];
                 if (type === "table") {
                     numTables += 1;
                 }
