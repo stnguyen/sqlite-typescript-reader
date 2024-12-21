@@ -209,6 +209,22 @@ export class Database {
         return values;
     }
 
+    private async findTableRootPage(tableName: string): Promise<number> {
+        let tableRootPage: number | undefined;
+        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
+            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                const [type, name, _, rootPage] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.rootpage_3) as [string, string, any, number];
+                if (type === "table" && name === tableName) {
+                    tableRootPage = rootPage;
+                }
+            }
+        })
+        if (!tableRootPage) {
+            throw new Error(`No such table: ${tableName}`);
+        }
+        return tableRootPage;
+    }
+
     async getTableNames(): Promise<string[]> {
         const tableNames: string[] = []
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
@@ -223,18 +239,7 @@ export class Database {
     }
 
     async countTableRows(tableName: string): Promise<number> {
-        let tableRootPage: number | undefined;
-        await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
-            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const [type, name, _, rootpage] = this.readColumns(page, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.rootpage_3) as [string, string, any, number];
-                if (type === "table" && name === tableName) {
-                    tableRootPage = rootpage;
-                }
-            }
-        })
-        if (!tableRootPage) {
-            throw new Error(`No such table: ${tableName}`);
-        }
+        const tableRootPage = await this.findTableRootPage(tableName);
 
         let numRows = 0;
         await this.scanTable(tableRootPage, (page: Page) => {
