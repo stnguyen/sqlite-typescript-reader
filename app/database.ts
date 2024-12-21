@@ -31,6 +31,13 @@ interface SerialTypeWithSize {
 }
 
 const FIRST_PAGE_NUMBER = 1;
+enum SqliteSchemaColumnIndices {
+    type = 0,
+    name,
+    tbl_name,
+    rootpage,
+    sql
+}
 
 export function parseSerialTypeCode(code: number): SerialTypeWithSize {
     let type: number;
@@ -74,21 +81,6 @@ export function parseSerialTypeCode(code: number): SerialTypeWithSize {
             break;
     }
     return { type, size }
-}
-
-function readIntColumn(serialType: SerialType, dataView: DataView, byteOffset: number) {
-    if (serialType === SerialType.Int8) {
-        return dataView.getInt8(byteOffset);
-    }
-    else if (serialType === SerialType.Int16) {
-        return dataView.getInt16(byteOffset);
-    }
-    else if (serialType === SerialType.Int32) {
-        return dataView.getInt32(byteOffset);
-    }
-    else {
-        throw new Error(`Unsupported int column of type ${serialType}`);
-    }
 }
 
 function isInteriorPage(pageType: PageType): boolean {
@@ -170,29 +162,52 @@ export class Database {
         return _scanTablePage(rootPageNumber);
     }
 
+    private readColumn(page: Page, cellIdx: number, colIdx: number): number | string | null {
+        const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+        const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+        const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
+        const [payloadHeaderSize, firstColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
+        let colSerialTypeAddr = firstColSerialTypeAddr;
+        let byteOffset = payloadAddr + payloadHeaderSize;
+        let serialTypeWithSize: SerialTypeWithSize | undefined;
+        for (let i = 0; i <= colIdx; i++) {
+            const result = readVarInt(page.dataView, colSerialTypeAddr);
+            serialTypeWithSize = parseSerialTypeCode(result[0]);
+            if (i < colIdx) {
+                byteOffset += serialTypeWithSize.size;
+                colSerialTypeAddr = result[1];
+            }
+        }
+        switch (serialTypeWithSize!.type) {
+            case SerialType.Null:
+                return null;
+            case SerialType.Const0:
+                return 0;
+            case SerialType.Const1:
+                return 1;
+            case SerialType.Int8:
+                return page.dataView.getInt8(byteOffset);
+            case SerialType.Int16:
+                return page.dataView.getInt16(byteOffset);
+            case SerialType.Int32:
+                return page.dataView.getInt32(byteOffset);
+            case SerialType.Float:
+                return page.dataView.getFloat64(byteOffset);
+            case SerialType.String:
+                return decodeString(page.dataView, byteOffset, serialTypeWithSize!.size);
+    
+            default:
+                throw new Error(`Not implemented: reading column value of type ${serialTypeWithSize!.type}`);
+        }
+    }
+
     async getTableNames(): Promise<string[]> {
         const tableNames: string[] = []
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
-                const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
-                const [payloadHeaderSize, typeColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
-                const [typeColSerialType, nameColSerialTypeAddr] = readVarInt(page.dataView, typeColSerialTypeAddr);
-                const [nameColSerialType, _] = readVarInt(page.dataView, nameColSerialTypeAddr);
-                const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                if (typeColSerialTypeWithSize.type !== SerialType.String) {
-                    throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
-                }
-                const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
                 if (type === "table") {
-                    const nameColSerialTypeAddrWithSize = parseSerialTypeCode(nameColSerialType);
-                    if (nameColSerialTypeAddrWithSize.type !== SerialType.String) {
-                        throw Error(`Invalid serial type for sqlite_schema.name column. Expected ${SerialType.String}, got ${nameColSerialTypeAddrWithSize.type}`);
-                    }
-                    // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
-                    // Assume it's UTF-8 for now
-                    const name = decodeString(page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size, nameColSerialTypeAddrWithSize.size);
+                    const name = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.name) as string;
                     if (!name.startsWith("sqlite_")) {
                         tableNames.push(name)
                     }
@@ -206,30 +221,11 @@ export class Database {
         let tableRootPage: number | undefined;
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
-                const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
-                const [payloadHeaderSize, typeColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
-                const [typeColSerialType, nameColSerialTypeAddr] = readVarInt(page.dataView, typeColSerialTypeAddr);
-                const [nameColSerialType, tblNameColSerialTypeAddr] = readVarInt(page.dataView, nameColSerialTypeAddr);
-                const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                if (typeColSerialTypeWithSize.type !== SerialType.String) {
-                    throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
-                }
-                const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
                 if (type === "table") {
-                    const nameColSerialTypeAddrWithSize = parseSerialTypeCode(nameColSerialType);
-                    if (nameColSerialTypeAddrWithSize.type !== SerialType.String) {
-                        throw Error(`Invalid serial type for sqlite_schema.name column. Expected ${SerialType.String}, got ${nameColSerialTypeAddrWithSize.type}`);
-                    }
-                    // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
-                    // Assume it's UTF-8 for now
-                    const name = decodeString(page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size, nameColSerialTypeAddrWithSize.size);
+                    const name = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.name) as string;
                     if (name === tableName) {
-                        const [tblNameColSerialType, rootPageColSerialTypeAddr] = readVarInt(page.dataView, tblNameColSerialTypeAddr);
-                        const tblNameColSerialTypeWithSize = parseSerialTypeCode(tblNameColSerialType);
-                        const [rootPageColSerialType, _] = readVarInt(page.dataView, rootPageColSerialTypeAddr);
-                        tableRootPage = readIntColumn(rootPageColSerialType, page.dataView, payloadAddr + payloadHeaderSize + typeColSerialTypeWithSize.size + nameColSerialTypeAddrWithSize.size + tblNameColSerialTypeWithSize.size);
+                        tableRootPage = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.rootpage) as number;
                         break;
                     }
                 }
@@ -241,7 +237,7 @@ export class Database {
 
         let numRows = 0;
         await this.scanTable(tableRootPage, (page: Page) => {
-           numRows += page.header.numCells; 
+            numRows += page.header.numCells;
         })
         return numRows;
     }
@@ -250,18 +246,7 @@ export class Database {
         let numTables = 0;
         await this.scanTable(FIRST_PAGE_NUMBER, (page: Page) => {
             for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
-                const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
-                const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
-                const [payloadHeaderSize, typeColSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
-                const [typeColSerialType, _] = readVarInt(page.dataView, typeColSerialTypeAddr);
-                const typeColSerialTypeWithSize = parseSerialTypeCode(typeColSerialType);
-                if (typeColSerialTypeWithSize.type !== SerialType.String) {
-                    throw Error(`Invalid serial type for sqlite_schema.type column. Expected ${SerialType.String}, got ${typeColSerialTypeWithSize.type}`);
-                }
-                // TODO handle different string encoding https://www.sqlite.org/fileformat2.html#enc
-                // Assume it's UTF-8 for now
-                const type = decodeString(page.dataView, payloadAddr + payloadHeaderSize, typeColSerialTypeWithSize.size);
+                const type = this.readColumn(page, cellIdx, SqliteSchemaColumnIndices.type) as string;
                 if (type === "table") {
                     numTables += 1;
                 }

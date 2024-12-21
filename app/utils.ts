@@ -30,6 +30,15 @@ export function readVarInt(dataView: DataView, offset: number): [number, number]
     return [value, offset + 9];
 }
 
+/**
+ * Decode a string value.
+ * TODO assuming UTF-8 for now.
+ * Need to support different string encoding https://www.sqlite.org/fileformat2.html#enc
+ * @param dataView 
+ * @param offset 
+ * @param size 
+ * @returns 
+ */
 export function decodeString(dataView: DataView, offset: number, size: number): string {
     return textDecoder.decode(dataView.buffer.slice(offset, offset + size));
 }
