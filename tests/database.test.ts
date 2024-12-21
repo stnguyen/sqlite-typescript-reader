@@ -33,6 +33,13 @@ describe("sample.db", async () => {
         expect(names).toEqual(["apples", "oranges"]);
         db.close();
     })
+
+    test("count rows", async () => {
+      const db = await Database.open(DB_PATH);
+      expect(await db.countTableRows("apples")).toEqual(4);
+      expect(await db.countTableRows("oranges")).toEqual(6);
+      db.close();
+    })
 })
 
 describe("Chinook_Sqlite.sqlite", async () => {
@@ -62,6 +69,13 @@ describe("Chinook_Sqlite.sqlite", async () => {
             "PlaylistTrack", "Track"
           ]);
         db.close();
+    })
+
+    test("count rows", async () => {
+      const db = await Database.open(DB_PATH);
+      expect(await db.countTableRows("Customer")).toEqual(59);
+      expect(await db.countTableRows("Track")).toEqual(3503);
+      db.close();
     })
 })
 
