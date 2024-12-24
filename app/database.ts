@@ -101,7 +101,7 @@ function isTablePage(pageType: PageType): boolean {
     return pageType === PageType.InteriorTable || pageType == PageType.LeafTable;
 }
 
-function readColumnValeus(serialTypeWithSize: SerialTypeWithSize, dataView: DataView, byteOffset: number): ColumnValue {
+function readColumnValue(serialTypeWithSize: SerialTypeWithSize, dataView: DataView, byteOffset: number): ColumnValue {
     switch (serialTypeWithSize.type) {
         case SerialType.Null:
             return null;
@@ -196,7 +196,15 @@ export class Database {
         return _scanTablePage(rootPageNumber);
     }
 
-    private readColumns(page: Page, cellIdx: number, fromColIdx: number, toColIdx?: number): ColumnValue[] {
+    private readCellColumns(page: Page, cellIdx: number, colIndicies: number[]): ColumnValue[] {
+        const fromColIdx = Math.min(...colIndicies)
+        const toColIdx = Math.max(...colIndicies)
+        const values = new Array<ColumnValue>(colIndicies.length)
+        const colIndexToValueSlotMap = colIndicies.reduce((map, colIdx, valSlot) => {
+            map.set(colIdx, valSlot)
+            return map
+        }, new Map<number, number>())
+
         const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
         const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
         const [rowid, payloadAddr] = readVarInt(page.dataView, rowidAddr);
@@ -204,12 +212,11 @@ export class Database {
         let colSerialTypeAddr = firstColSerialTypeAddr;
         let byteOffset = payloadAddr + payloadHeaderSize;
         let serialTypeWithSize: SerialTypeWithSize | undefined;
-        const values = []
-        for (let i = 0; i <= (toColIdx || fromColIdx); i++) {
+        for (let i = 0; i <= toColIdx; i++) {
             const result = readVarInt(page.dataView, colSerialTypeAddr);
             serialTypeWithSize = parseSerialTypeCode(result[0]);
-            if (i >= fromColIdx) {
-                values.push(readColumnValeus(serialTypeWithSize, page.dataView, byteOffset));
+            if (colIndexToValueSlotMap.has(i)) {
+                values[colIndexToValueSlotMap.get(i)!] = readColumnValue(serialTypeWithSize, page.dataView, byteOffset)
             }
             byteOffset += serialTypeWithSize.size;
             colSerialTypeAddr = result[1];
@@ -221,7 +228,12 @@ export class Database {
         let schema: Schema | undefined;
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type, name, tbl_name, rootPage, sql] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.sql_4) as [string, string, string, number, string];
+                const [type, name, tbl_name, rootPage, sql] = this.readCellColumns(leafPage, cellIdx, [
+                    SqliteSchemaColumnIndices.type_0,
+                    SqliteSchemaColumnIndices.name_1,
+                    SqliteSchemaColumnIndices.tbl_name_2,
+                    SqliteSchemaColumnIndices.rootpage_3,
+                    SqliteSchemaColumnIndices.sql_4]) as [string, string, string, number, string];
                 if (schemaName === name) {
                     schema = { type, name, tbl_name, rootPage, sql } as Schema;
                 }
@@ -237,7 +249,7 @@ export class Database {
         const tableNames: string[] = []
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type, name] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1) as [string, string];
+                const [type, name] = this.readCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1]) as [string, string];
                 if (type === "table" && !name.startsWith("sqlite_")) {
                     tableNames.push(name)
                 }
@@ -267,7 +279,7 @@ export class Database {
         const values: ColumnValue[] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [value] = this.readColumns(leafPage, cellIdx, columnIndex);
+                const [value] = this.readCellColumns(leafPage, cellIdx, [columnIndex]);
                 values.push(value);
             }
         })
@@ -279,7 +291,7 @@ export class Database {
         let numTables = 0;
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type] = this.readColumns(leafPage, cellIdx, SqliteSchemaColumnIndices.type_0) as [string];
+                const [type] = this.readCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0]) as [string];
                 if (type === "table") {
                     numTables += 1;
                 }
