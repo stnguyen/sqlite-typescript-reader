@@ -268,19 +268,22 @@ export class Database {
         return numRows;
     }
 
-    async getColumnValues(tableName: string, columnName: string): Promise<ColumnValue[]> {
+    async getAllRowValues(tableName: string, columnNames: string[]): Promise<ColumnValue[][]> {
         const schema = await this.readSchema(tableName);
         const columns = parseColumnsFromSchemaSQL(schema.sql);
-        const columnIndex = columns.indexOf(columnName)
-        if (columnIndex === -1) {
-            throw new Error(`No such column: ${columnName}`)
-        }
+        const columnIndicies = columnNames.map(colName => {
+            const idx = columns.indexOf(colName)
+            if (idx === -1) {
+                throw new Error(`No such column: ${colName}`)
+            }
+            return idx
+        })
 
-        const values: ColumnValue[] = [];
+        const values: ColumnValue[][] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [value] = this.readCellColumns(leafPage, cellIdx, [columnIndex]);
-                values.push(value);
+                const cellValues = this.readCellColumns(leafPage, cellIdx, columnIndicies);
+                values.push(cellValues);
             }
         })
 
