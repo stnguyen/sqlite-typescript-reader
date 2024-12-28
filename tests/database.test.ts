@@ -49,10 +49,10 @@ describe("sample.db", async () => {
 
   test("get single column values", async () => {
     const db = await Database.open(DB_PATH);
-    const values = await db.getAllRowValues("apples", ["name"]);
+    const values = await db.select("apples", ["name"]);
     expect(values.sort()).toEqual([["Fuji"], ["Golden Delicious"], ["Granny Smith"], ["Honeycrisp"]]);
     try {
-      await db.getAllRowValues("apples", ["notExist"]);
+      await db.select("apples", ["notExist"]);
     } catch (error) {
       expect((error as any).message).toEqual("No such column: notExist")
     }
@@ -62,10 +62,23 @@ describe("sample.db", async () => {
 
   test("get multi column values", async () => {
     const db = await Database.open(DB_PATH);
-    const values = await db.getAllRowValues("apples", ["name", "color"]);
+    const values = await db.select("apples", ["name", "color"]);
     expect(values.sort()).toEqual([["Fuji", "Red"], ["Golden Delicious", "Yellow"], ["Granny Smith", "Light Green"], ["Honeycrisp", "Blush Red"]]);
     try {
-      await db.getAllRowValues("apples", ["name", "notExist"]);
+      await db.select("apples", ["name", "notExist"]);
+    } catch (error) {
+      expect((error as any).message).toEqual("No such column: notExist")
+    }
+    db.close();
+    db.close();
+  })
+
+  test("get multi column values with where clause", async () => {
+    const db = await Database.open(DB_PATH);
+    const values = await db.select("apples", ["name", "color"], { column: "color", operator: "=", value: "Yellow"});
+    expect(values.sort()).toEqual([["Golden Delicious", "Yellow"]]);
+    try {
+      await db.select("apples", ["name", "notExist"]);
     } catch (error) {
       expect((error as any).message).toEqual("No such column: notExist")
     }
@@ -112,7 +125,7 @@ describe("Chinook_Sqlite.sqlite", async () => {
 
   test("get single column values", async () => {
     const db = await Database.open(DB_PATH);
-    const values = await db.getAllRowValues("Customer", ["FirstName"]);
+    const values = await db.select("Customer", ["FirstName"]);
     expect(values.sort()).toEqual([["Aaron"], ["Alexandre"], ["Astrid"], ["Bjørn"], ["Camille"], ["Daan"], ["Dan"], ["Diego"], ["Dominique"], ["Eduardo"], ["Edward"], ["Ellie"], ["Emma"], ["Enrique"], ["Fernanda"], ["Frank"], ["Frank"], ["František"], ["François"], ["Fynn"], ["Hannah"], ["Heather"], ["Helena"], ["Hugh"], ["Isabelle"], ["Jack"], ["Jennifer"], ["Joakim"], ["Johannes"], ["John"], ["João"], ["Julia"], ["Kara"], ["Kathy"], ["Ladislav"], ["Leonie"], ["Lucas"], ["Luis"], ["Luís"], ["Madalena"], ["Manoj"], ["Marc"], ["Mark"], ["Mark"], ["Martha"], ["Michelle"], ["Niklas"], ["Patrick"], ["Phil"], ["Puja"], ["Richard"], ["Robert"], ["Roberto"], ["Stanisław"], ["Steve"], ["Terhi"], ["Tim"], ["Victor"], ["Wyatt"]]);
     db.close();
   })
@@ -120,7 +133,7 @@ describe("Chinook_Sqlite.sqlite", async () => {
 
   test("get single column values", async () => {
     const db = await Database.open(DB_PATH);
-    const values = await db.getAllRowValues("Customer", ["FirstName", "LastName"]);
+    const values = await db.select("Customer", ["FirstName", "LastName"]);
     expect(values.sort()).toEqual([
       ["Aaron", "Mitchell"],
       ["Alexandre", "Rocha"],

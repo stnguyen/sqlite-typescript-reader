@@ -140,6 +140,12 @@ interface Page {
     dataView: DataView
 }
 
+interface WhereClause {
+    column: string,
+    operator: string,
+    value: ColumnValue
+}
+
 const SIZE_DB_HEADER_BYTES = 100;
 
 /**
@@ -197,13 +203,16 @@ export class Database {
     }
 
     private readCellColumns(page: Page, cellIdx: number, colIndicies: number[]): ColumnValue[] {
-        const fromColIdx = Math.min(...colIndicies)
         const toColIdx = Math.max(...colIndicies)
         const values = new Array<ColumnValue>(colIndicies.length)
         const colIndexToValueSlotMap = colIndicies.reduce((map, colIdx, valSlot) => {
-            map.set(colIdx, valSlot)
+            if (map.has(colIdx)) {
+                map.get(colIdx)?.push(valSlot);
+            } else {
+                map.set(colIdx, [valSlot]);
+            }
             return map
-        }, new Map<number, number>())
+        }, new Map<number, number[]>())
 
         const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
         const [cellPayloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
@@ -216,7 +225,8 @@ export class Database {
             const result = readVarInt(page.dataView, colSerialTypeAddr);
             serialTypeWithSize = parseSerialTypeCode(result[0]);
             if (colIndexToValueSlotMap.has(i)) {
-                values[colIndexToValueSlotMap.get(i)!] = readColumnValue(serialTypeWithSize, page.dataView, byteOffset)
+                const value = readColumnValue(serialTypeWithSize, page.dataView, byteOffset);
+                colIndexToValueSlotMap.get(i)!.forEach(slot => { values[slot] = value });
             }
             byteOffset += serialTypeWithSize.size;
             colSerialTypeAddr = result[1];
@@ -268,21 +278,38 @@ export class Database {
         return numRows;
     }
 
-    async getAllRowValues(tableName: string, columnNames: string[]): Promise<ColumnValue[][]> {
+    async select(tableName: string, columnNames: string[], where?: WhereClause): Promise<ColumnValue[][]> {
+        if (where && where.operator !== '=') {
+            throw new Error(`where.operator is not supported: ${where.operator}`)
+        }
+        
         const schema = await this.readSchema(tableName);
-        const columns = parseColumnsFromSchemaSQL(schema.sql);
-        const columnIndicies = columnNames.map(colName => {
-            const idx = columns.indexOf(colName)
+        const schemaColumns = parseColumnsFromSchemaSQL(schema.sql);
+        const readingColumns = where ? [...columnNames, where.column] : columnNames;
+
+        const columnIndicies = readingColumns.map(colName => {
+            const idx = schemaColumns.indexOf(colName)
             if (idx === -1) {
                 throw new Error(`No such column: ${colName}`)
             }
             return idx
         })
+        console.debug(columnIndicies)
 
         const values: ColumnValue[][] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
                 const cellValues = this.readCellColumns(leafPage, cellIdx, columnIndicies);
+                if (where) {
+                    // Last column is for filtering
+                    const whereValue = cellValues[cellValues.length - 1];
+                    if (whereValue !== where.value) {
+                        continue;
+                    }
+                    console.debug('cellValues before', cellValues);
+                    cellValues.pop();
+                    console.debug('cellValues after', cellValues);
+                }
                 values.push(cellValues);
             }
         })

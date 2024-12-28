@@ -20,7 +20,7 @@ if (command === ".dbinfo") {
     if (match) {
         const { exprs, tableName } = match.groups as any;
         const columnNames = (exprs as string).split(/\s*,\s*/)
-        const rows = await db.getAllRowValues(tableName, columnNames)
+        const rows = await db.select(tableName, columnNames)
         const rowsFormatted = rows.map(r => r.join("|"))
         console.log(rowsFormatted.join("\n"))
     }
