@@ -294,7 +294,6 @@ export class Database {
             }
             return idx
         })
-        console.debug(columnIndicies)
 
         const values: ColumnValue[][] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
@@ -306,9 +305,7 @@ export class Database {
                     if (whereValue !== where.value) {
                         continue;
                     }
-                    console.debug('cellValues before', cellValues);
                     cellValues.pop();
-                    console.debug('cellValues after', cellValues);
                 }
                 values.push(cellValues);
             }
