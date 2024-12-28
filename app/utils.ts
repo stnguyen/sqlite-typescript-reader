@@ -56,7 +56,7 @@ export function parseColumnsFromSchemaSQL(sql: string): string[] {
     //     name text,
     //     color text
     // );
-    const regex = /CREATE TABLE \[?\w+\]?\s*\(\s*(?<columnDefinitions>(.+\s*)+)/;
+    const regex = /CREATE TABLE [\["]?\w+[\]"]?\s*\(\s*(?<columnDefinitions>(.+\s*)+)/;
     const match = sql.trim().match(regex);
     if (!match || !match.groups) {
         throw new Error("Failed to parse SQL");
