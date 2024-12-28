@@ -46,7 +46,7 @@ export function decodeString(dataView: DataView, offset: number, size: number): 
 /**
  * Export column names from a schema sql
  */
-export function parseColumnsFromSchemaSQL(sql: string): string[] {
+export function parseColumnsFromSchemaSQL(sql: string): { columns: string[], integerPrimaryKeyColIndex?: number } {
     // TODO need a much better parser
 
     // Sample SQL:
@@ -64,5 +64,12 @@ export function parseColumnsFromSchemaSQL(sql: string): string[] {
     const { columnDefinitions } = match.groups as any;
     const lines = (columnDefinitions as string).split(",").map(l => l.trim());
     const constraintStartIdx = lines.findIndex(l => l.startsWith("CONSTRAINT"));
-    return lines.slice(0, constraintStartIdx > -1 ? constraintStartIdx : undefined).map(l => l.split(/\s+/)[0].replace("[", "").replace("]", ""));
+    const columnLines = lines.slice(0, constraintStartIdx > -1 ? constraintStartIdx : undefined);
+    const columnParts = columnLines.map(l => l.split(/\s+/));
+    const columns = columnParts.map(cp => cp[0].replace("[", "").replace("]", ""));
+    const integerPrimaryKeyColIndex = columnParts.findIndex(cp => cp.slice(1).join(" ").toLocaleLowerCase().startsWith("integer primary key"));
+    return {
+        columns,
+        integerPrimaryKeyColIndex: integerPrimaryKeyColIndex > -1 ? integerPrimaryKeyColIndex : undefined
+    }
 }

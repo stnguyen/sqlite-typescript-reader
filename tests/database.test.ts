@@ -57,7 +57,6 @@ describe("sample.db", async () => {
       expect((error as any).message).toEqual("No such column: notExist")
     }
     db.close();
-    db.close();
   })
 
   test("get multi column values", async () => {
@@ -70,19 +69,19 @@ describe("sample.db", async () => {
       expect((error as any).message).toEqual("No such column: notExist")
     }
     db.close();
-    db.close();
   })
 
   test("get multi column values with where clause", async () => {
     const db = await Database.open(DB_PATH);
     const values = await db.select("apples", ["name", "color"], { column: "color", operator: "=", value: "Yellow"});
     expect(values.sort()).toEqual([["Golden Delicious", "Yellow"]]);
-    try {
-      await db.select("apples", ["name", "notExist"]);
-    } catch (error) {
-      expect((error as any).message).toEqual("No such column: notExist")
-    }
     db.close();
+  })
+
+  test("get multi column valuesm, one column is integer primary key", async () => {
+    const db = await Database.open(DB_PATH);
+    const values = await db.select("apples", ["name", "color", "id"]);
+    expect(values.sort()).toEqual([["Fuji", "Red", 2], ["Golden Delicious", "Yellow", 4], ["Granny Smith", "Light Green", 1], ["Honeycrisp", "Blush Red", 3]]);
     db.close();
   })
 })

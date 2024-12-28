@@ -62,7 +62,7 @@ CREATE TABLE apples
 	name text,
 	color text
 );
-`)).toEqual(["id", "name", "color"])
+`).columns).toEqual(["id", "name", "color"])
   })
 
   it("Chinook_Sqlite.sqlite > Customer", () => {
@@ -86,18 +86,18 @@ CREATE TABLE [Customer]
     FOREIGN KEY ([SupportRepId]) REFERENCES [Employee] ([EmployeeId])
 		ON DELETE NO ACTION ON UPDATE NO ACTION
 );
-`)).toEqual(["CustomerId", "FirstName", "LastName", "Company", "Address", "City", "State", "Country", "PostalCode", "Phone", "Fax", "Email", "SupportRepId"])
+`).columns).toEqual(["CustomerId", "FirstName", "LastName", "Company", "Address", "City", "State", "Country", "PostalCode", "Phone", "Fax", "Email", "SupportRepId"])
   })
 
   it("generated", () => {
     expect(parseColumnsFromSchemaSQL(`
 CREATE TABLE apples (id integer primary key autoincrement, name text,   color text);
-`)).toEqual(["id", "name", "color"])
+`).columns).toEqual(["id", "name", "color"])
   })
 
   it("superheroes", () => {
     expect(parseColumnsFromSchemaSQL(`
 CREATE TABLE "superheroes" (id integer primary key autoincrement, name text not null, eye_color text, hair_color text, appearance_count integer, first_appearance text, first_appearance_year text)
-`)).toEqual(["id", "name", "eye_color", "hair_color", "appearance_count", "first_appearance", "first_appearance_year"])
+`).columns).toEqual(["id", "name", "eye_color", "hair_color", "appearance_count", "first_appearance", "first_appearance_year"])
   })
 })

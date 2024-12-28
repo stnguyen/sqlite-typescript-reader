@@ -202,7 +202,7 @@ export class Database {
         return _scanTablePage(rootPageNumber);
     }
 
-    private readCellColumns(page: Page, cellIdx: number, colIndicies: number[]): ColumnValue[] {
+    private readCellColumns(page: Page, cellIdx: number, colIndicies: number[], integerPrimaryKeyColIndex?: number): ColumnValue[] {
         const toColIdx = Math.max(...colIndicies)
         const values = new Array<ColumnValue>(colIndicies.length)
         const colIndexToValueSlotMap = colIndicies.reduce((map, colIdx, valSlot) => {
@@ -225,7 +225,7 @@ export class Database {
             const result = readVarInt(page.dataView, colSerialTypeAddr);
             serialTypeWithSize = parseSerialTypeCode(result[0]);
             if (colIndexToValueSlotMap.has(i)) {
-                const value = readColumnValue(serialTypeWithSize, page.dataView, byteOffset);
+                const value = i === integerPrimaryKeyColIndex ? rowid :readColumnValue(serialTypeWithSize, page.dataView, byteOffset);
                 colIndexToValueSlotMap.get(i)!.forEach(slot => { values[slot] = value });
             }
             byteOffset += serialTypeWithSize.size;
@@ -284,7 +284,7 @@ export class Database {
         }
         
         const schema = await this.readSchema(tableName);
-        const schemaColumns = parseColumnsFromSchemaSQL(schema.sql);
+        const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseColumnsFromSchemaSQL(schema.sql);
         const readingColumns = where ? [...columnNames, where.column] : columnNames;
 
         const columnIndicies = readingColumns.map(colName => {
@@ -298,7 +298,7 @@ export class Database {
         const values: ColumnValue[][] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const cellValues = this.readCellColumns(leafPage, cellIdx, columnIndicies);
+                const cellValues = this.readCellColumns(leafPage, cellIdx, columnIndicies, integerPrimaryKeyColIndex);
                 if (where) {
                     // Last column is for filtering
                     const whereValue = cellValues[cellValues.length - 1];
