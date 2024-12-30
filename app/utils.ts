@@ -44,9 +44,9 @@ export function decodeString(dataView: DataView, offset: number, size: number): 
 }
 
 /**
- * Export schema.sql
+ * Parse table schema sql field
  */
-export function parseFromSchemaSQL(sql: string): {
+export function parseTableSchemaSQL(sql: string): {
     columns: string[],
     integerPrimaryKeyColIndex?: number
     autoIndexColumnToNMap: Map<string, number>
@@ -90,4 +90,22 @@ export function parseFromSchemaSQL(sql: string): {
         integerPrimaryKeyColIndex: integerPrimaryKeyColIndex > -1 ? integerPrimaryKeyColIndex : undefined,
         autoIndexColumnToNMap
     }
+}
+
+/**
+ * Parse index schema sql field
+ */
+export function parseIndexSchemaSQL(sql: string): { table: string, columns: string[] } {
+    // TODO need a much better parser
+    const regex = /CREATE INDEX [\["]?\w+[\]"]?\s*on\s+(?<table>\w+)\s*\((?<content>(.+\s*)+)\)/;
+    const match = sql.trim().match(regex);
+    if (!match || !match.groups) {
+        throw new Error("Failed to parse SQL");
+    } 
+
+    const { table, content } = match.groups as any;
+    const parts = (content as string).split(",").map(l => l.trim());
+    const columns = parts.map(p => p.replace("[", "").replace("]", ""));
+
+    return {table, columns}
 }

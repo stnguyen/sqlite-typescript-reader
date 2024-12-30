@@ -73,7 +73,7 @@ describe("sample.db", async () => {
 
   test("get multi column values with where clause", async () => {
     const db = await Database.open(DB_PATH);
-    const values = await db.select("apples", ["name", "color"], { column: "color", operator: "=", value: "Yellow"});
+    const values = await db.select("apples", ["name", "color"], { column: "color", operator: "=", value: "Yellow" });
     expect(values.sort()).toEqual([["Golden Delicious", "Yellow"]]);
     db.close();
   })
@@ -82,6 +82,51 @@ describe("sample.db", async () => {
     const db = await Database.open(DB_PATH);
     const values = await db.select("apples", ["name", "color", "id"]);
     expect(values.sort()).toEqual([["Fuji", "Red", 2], ["Golden Delicious", "Yellow", 4], ["Granny Smith", "Light Green", 1], ["Honeycrisp", "Blush Red", 3]]);
+    db.close();
+  })
+})
+
+describe("companies.db", async () => {
+  const DB_PATH = "tests/companies.db";
+
+  test("find index", async () => {
+    const db = await Database.open(DB_PATH);
+
+    let index = await db.findIndex("companies", "nonExistColumn");
+    expect(index).toBeUndefined();
+
+    index = await db.findIndex("nonExistTable", "country");
+    expect(index).toBeUndefined();
+
+    index = await db.findIndex("companies", "country");
+    expect(index).toBeDefined();
+    expect(index!.name).toEqual("idx_companies_country");
+
+    db.close();
+  })
+
+  test("search index", async () => {
+    const db = await Database.open(DB_PATH);
+
+    const indexSchema = await db.findIndex("companies", "country");
+    const rowids = await db.searchIndex(indexSchema!.rootPage, "são tomé and príncipe");
+    expect(rowids).toEqual([
+      2008667,
+      2029272,
+      2537559,
+      2553736,
+      3519013,
+      3891158,
+      4033966,
+      4300930,
+      4383418,
+      4733593,
+      5549499,
+      6093822,
+      6423942,
+      6741320
+    ])
+
     db.close();
   })
 })

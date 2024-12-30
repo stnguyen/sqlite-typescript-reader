@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parseFromSchemaSQL, readVarInt } from "../app/utils";
+import { parseIndexSchemaSQL, parseTableSchemaSQL, readVarInt } from "../app/utils";
 
 describe("readVarInt", () => {
   it("should correctly decode a single-byte varint", () => {
@@ -53,9 +53,9 @@ describe("readVarInt", () => {
   })
 });
 
-describe("parseColumnsFromSchemaSQL", () => {
+describe("parseTableSchemaSQL", () => {
   it("sample.db > apples", () => {
-    const parsed = parseFromSchemaSQL(`
+    const parsed = parseTableSchemaSQL(`
       CREATE TABLE apples
       (
         id integer primary key autoincrement,
@@ -69,7 +69,7 @@ describe("parseColumnsFromSchemaSQL", () => {
   })
 
   it("Chinook_Sqlite.sqlite > Customer", () => {
-    expect(parseFromSchemaSQL(`
+    expect(parseTableSchemaSQL(`
 CREATE TABLE [Customer]
 (
     [CustomerId] INTEGER  NOT NULL,
@@ -93,14 +93,27 @@ CREATE TABLE [Customer]
   })
 
   it("generated", () => {
-    expect(parseFromSchemaSQL(`
+    expect(parseTableSchemaSQL(`
 CREATE TABLE apples (id integer primary key autoincrement, name text,   color text);
 `).columns).toEqual(["id", "name", "color"])
   })
 
   it("superheroes", () => {
-    expect(parseFromSchemaSQL(`
+    expect(parseTableSchemaSQL(`
 CREATE TABLE "superheroes" (id integer primary key autoincrement, name text not null, eye_color text, hair_color text, appearance_count integer, first_appearance text, first_appearance_year text)
 `).columns).toEqual(["id", "name", "eye_color", "hair_color", "appearance_count", "first_appearance", "first_appearance_year"])
+  })
+})
+
+
+describe("parseIndexSchemaSQL", () => {
+  it("companies", () => {
+    expect(parseIndexSchemaSQL(`
+CREATE INDEX idx_companies_country
+        on companies (country);
+`)).toEqual({
+      table: "companies",
+      columns: ["country"]
+    })
   })
 })

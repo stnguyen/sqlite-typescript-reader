@@ -1,7 +1,7 @@
 import { open } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { constants } from 'fs';
-import { decodeString, parseFromSchemaSQL, readVarInt } from './utils';
+import { decodeString, parseIndexSchemaSQL, parseTableSchemaSQL as parseTableSchemaSQL, readVarInt } from './utils';
 
 interface DatabaseHeader {
     pageSize: number
@@ -39,6 +39,10 @@ enum SqliteSchemaColumnIndices {
     tbl_name_2,
     rootpage_3,
     sql_4
+}
+
+enum IndexCellColumnIndices {
+
 }
 
 interface Schema {
@@ -113,8 +117,12 @@ function readColumnValue(serialTypeWithSize: SerialTypeWithSize, dataView: DataV
             return dataView.getInt8(byteOffset);
         case SerialType.Int16:
             return dataView.getInt16(byteOffset);
+        case SerialType.Int24:
+            return (dataView.getInt16(byteOffset) << 8) + (dataView.getInt8(byteOffset + 2))
         case SerialType.Int32:
             return dataView.getInt32(byteOffset);
+        case SerialType.Int48:
+            return (dataView.getInt32(byteOffset) << 16) + (dataView.getInt16(byteOffset + 4))
         case SerialType.Float:
             return dataView.getFloat64(byteOffset);
         case SerialType.String:
@@ -202,7 +210,7 @@ export class Database {
         return _scanTablePage(rootPageNumber);
     }
 
-    private readCellColumns(page: Page, cellIdx: number, colIndicies: number[], integerPrimaryKeyColIndex?: number): ColumnValue[] {
+    private readTableLeafCellColumns(page: Page, cellIdx: number, colIndicies: number[], integerPrimaryKeyColIndex?: number): ColumnValue[] {
         const toColIdx = Math.max(...colIndicies)
         const values = new Array<ColumnValue>(colIndicies.length)
         const colIndexToValueSlotMap = colIndicies.reduce((map, colIdx, valSlot) => {
@@ -225,7 +233,7 @@ export class Database {
             const result = readVarInt(page.dataView, colSerialTypeAddr);
             serialTypeWithSize = parseSerialTypeCode(result[0]);
             if (colIndexToValueSlotMap.has(i)) {
-                const value = i === integerPrimaryKeyColIndex ? rowid :readColumnValue(serialTypeWithSize, page.dataView, byteOffset);
+                const value = i === integerPrimaryKeyColIndex ? rowid : readColumnValue(serialTypeWithSize, page.dataView, byteOffset);
                 colIndexToValueSlotMap.get(i)!.forEach(slot => { values[slot] = value });
             }
             byteOffset += serialTypeWithSize.size;
@@ -238,7 +246,7 @@ export class Database {
         let schema: Schema | undefined;
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type, name, tbl_name, rootPage, sql] = this.readCellColumns(leafPage, cellIdx, [
+                const [type, name, tbl_name, rootPage, sql] = this.readTableLeafCellColumns(leafPage, cellIdx, [
                     SqliteSchemaColumnIndices.type_0,
                     SqliteSchemaColumnIndices.name_1,
                     SqliteSchemaColumnIndices.tbl_name_2,
@@ -255,11 +263,92 @@ export class Database {
         return schema;
     }
 
+    /**
+     * Search an index for rowids matching the indexed column value
+     * TODO support index with multiple columns
+     * TODO support spilled keys
+     * @param indexRootPage  root page number of the index
+     * @param values indexed column value
+     * @returns rowids
+     */
+    async searchIndex(indexRootPage: number, searchValue: ColumnValue): Promise<number[]> {
+        const result: number[] = [];
+        const _binSearch = async (pageNumber: number) => {
+            const page = await this.readPage(pageNumber);
+            if (page.header.pageType !== PageType.InteriorIndex && page.header.pageType !== PageType.LeafIndex) {
+                throw new Error(`Invalid page type encountered: page ${pageNumber} is of type ${page.header.pageType}, expected an index page`);
+            }
+
+            // TODO implement bin search, not this dumb linear scan
+            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
+                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+
+                const [payloadSize, payloadAddr] = readVarInt(page.dataView, cellAddr + (page.header.pageType === PageType.InteriorIndex ? 4 : 0));
+                const [payloadHeaderSize, colSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
+
+                let byteOffset = payloadAddr + payloadHeaderSize;
+                const [colSerialType, rowidSerialTypeAddr] = readVarInt(page.dataView, colSerialTypeAddr);
+                const colSerialTypeWithSize = parseSerialTypeCode(colSerialType);
+                const colValue = readColumnValue(colSerialTypeWithSize, page.dataView, byteOffset);
+                byteOffset += colSerialTypeWithSize.size;
+
+                if (colValue === searchValue) {
+                    const [rowidSerialType, _] = readVarInt(page.dataView, rowidSerialTypeAddr);
+                    const rowidSerialTypeWithSize = parseSerialTypeCode(rowidSerialType);
+                    const rowid = readColumnValue(rowidSerialTypeWithSize, page.dataView, byteOffset); 
+                    result.push(rowid as number);
+                }
+
+                if (page.header.pageType === PageType.InteriorIndex) {
+                    const leftChildPageNumber = page.dataView.getUint32(cellAddr);
+
+                    await _binSearch(leftChildPageNumber);
+                }
+            }
+
+            if (page.header.pageType === PageType.InteriorIndex) {
+                await _binSearch(page.header.rightMostPointer!)
+            }
+        }
+
+        await _binSearch(indexRootPage);
+        
+        return result;
+    }
+
+    async findIndex(tableName: string, columnName: string): Promise<Schema | undefined> {
+        let schema: Schema | undefined;
+        await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
+            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                const [type, name, tbl_name, rootPage, sql] = this.readTableLeafCellColumns(leafPage, cellIdx, [
+                    SqliteSchemaColumnIndices.type_0,
+                    SqliteSchemaColumnIndices.name_1,
+                    SqliteSchemaColumnIndices.tbl_name_2,
+                    SqliteSchemaColumnIndices.rootpage_3,
+                    SqliteSchemaColumnIndices.sql_4]) as [string, string, string, number, string];
+                if (type === "index" && tbl_name === tableName) {
+                    if (name.startsWith(`sqlite_autoindex_${name}_`)) {
+                        // auto-index
+                        // TODO support this
+                    } else {
+                        const { columns: indexColumns } = parseIndexSchemaSQL(sql);
+                        if (indexColumns[0] === columnName) {
+                            schema = { type, name, tbl_name, rootPage, sql } as Schema;
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+
+        return schema;
+    }
+
     async getTableNames(): Promise<string[]> {
         const tableNames: string[] = []
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type, name] = this.readCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1]) as [string, string];
+                const [type, name] = this.readTableLeafCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0, SqliteSchemaColumnIndices.name_1]) as [string, string];
                 if (type === "table" && !name.startsWith("sqlite_")) {
                     tableNames.push(name)
                 }
@@ -284,7 +373,7 @@ export class Database {
         }
         
         const schema = await this.readSchema(tableName);
-        const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseFromSchemaSQL(schema.sql);
+        const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseTableSchemaSQL(schema.sql);
         const readingColumns = where ? [...columnNames, where.column] : columnNames;
 
         const columnIndicies = readingColumns.map(colName => {
@@ -298,7 +387,7 @@ export class Database {
         const values: ColumnValue[][] = [];
         await this.scanTable(schema.rootPage, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const cellValues = this.readCellColumns(leafPage, cellIdx, columnIndicies, integerPrimaryKeyColIndex);
+                const cellValues = this.readTableLeafCellColumns(leafPage, cellIdx, columnIndicies, integerPrimaryKeyColIndex);
                 if (where) {
                     // Last column is for filtering
                     const whereValue = cellValues[cellValues.length - 1];
@@ -314,11 +403,12 @@ export class Database {
         return values;
     }
 
+
     async countTables(): Promise<number> {
         let numTables = 0;
         await this.scanTable(FIRST_PAGE_NUMBER, (leafPage: Page) => {
             for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const [type] = this.readCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0]) as [string];
+                const [type] = this.readTableLeafCellColumns(leafPage, cellIdx, [SqliteSchemaColumnIndices.type_0]) as [string];
                 if (type === "table") {
                     numTables += 1;
                 }
