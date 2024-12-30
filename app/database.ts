@@ -1,7 +1,7 @@
 import { open } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { constants } from 'fs';
-import { decodeString, parseColumnsFromSchemaSQL, readVarInt } from './utils';
+import { decodeString, parseFromSchemaSQL, readVarInt } from './utils';
 
 interface DatabaseHeader {
     pageSize: number
@@ -284,7 +284,7 @@ export class Database {
         }
         
         const schema = await this.readSchema(tableName);
-        const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseColumnsFromSchemaSQL(schema.sql);
+        const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseFromSchemaSQL(schema.sql);
         const readingColumns = where ? [...columnNames, where.column] : columnNames;
 
         const columnIndicies = readingColumns.map(colName => {

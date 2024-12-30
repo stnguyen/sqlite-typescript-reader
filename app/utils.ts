@@ -44,9 +44,13 @@ export function decodeString(dataView: DataView, offset: number, size: number): 
 }
 
 /**
- * Export column names from a schema sql
+ * Export schema.sql
  */
-export function parseColumnsFromSchemaSQL(sql: string): { columns: string[], integerPrimaryKeyColIndex?: number } {
+export function parseFromSchemaSQL(sql: string): {
+    columns: string[],
+    integerPrimaryKeyColIndex?: number
+    autoIndexColumnToNMap: Map<string, number>
+} {
     // TODO need a much better parser
 
     // Sample SQL:
@@ -56,20 +60,34 @@ export function parseColumnsFromSchemaSQL(sql: string): { columns: string[], int
     //     name text,
     //     color text
     // );
-    const regex = /CREATE TABLE [\["]?\w+[\]"]?\s*\(\s*(?<columnDefinitions>(.+\s*)+)/;
+    const regex = /CREATE TABLE [\["]?\w+[\]"]?\s*\(\s*(?<content>(.+\s*)+)/;
     const match = sql.trim().match(regex);
     if (!match || !match.groups) {
         throw new Error("Failed to parse SQL");
     }
-    const { columnDefinitions } = match.groups as any;
-    const lines = (columnDefinitions as string).split(",").map(l => l.trim());
-    const constraintStartIdx = lines.findIndex(l => l.startsWith("CONSTRAINT"));
+    const { content } = match.groups as any;
+    const lines = (content as string).split(",").map(l => l.trim());
+    const constraintStartIdx = lines.findIndex(l => l.match(/\s*(PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|CONSTRAINT)\b/));
     const columnLines = lines.slice(0, constraintStartIdx > -1 ? constraintStartIdx : undefined);
     const columnParts = columnLines.map(l => l.split(/\s+/));
     const columns = columnParts.map(cp => cp[0].replace("[", "").replace("]", ""));
-    const integerPrimaryKeyColIndex = columnParts.findIndex(cp => cp.slice(1).join(" ").toLocaleLowerCase().startsWith("integer primary key"));
+
+    // "Settings" include type-name and column-constraint, both optional
+    // https://www.sqlite.org/syntax/column-def.html
+    const columnSettings = columnParts.map(cp => cp.splice(1).join(" ").toLowerCase())
+    const integerPrimaryKeyColIndex = columnSettings.findIndex(s => s.startsWith("integer primary key"));
+    const autoIndexColumnToNMap = columnSettings.reduce((map, s, idx) => {
+        if (s.match(/\bunique\b/s) || (s.match(/\bprimary\s+key\b/) && !s.match(/\binteger\sprimary\s+key\b/))) {
+            map.set(columns[idx], map.size + 1);
+        }
+        return map;
+    }, new Map<string, number>());
+
+    // TODO parse table-constraint section
+
     return {
         columns,
-        integerPrimaryKeyColIndex: integerPrimaryKeyColIndex > -1 ? integerPrimaryKeyColIndex : undefined
+        integerPrimaryKeyColIndex: integerPrimaryKeyColIndex > -1 ? integerPrimaryKeyColIndex : undefined,
+        autoIndexColumnToNMap
     }
 }
