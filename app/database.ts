@@ -386,6 +386,7 @@ export class Database {
                     SqliteSchemaColumnIndices.rootpage_3,
                     SqliteSchemaColumnIndices.sql_4]) as [string, string, string, number, string];
                 if (type === "index" && tbl_name === tableName) {
+                    console.log(`See index of ${tbl_name}`, type, name, rootPage, sql)
                     if (name.startsWith(`sqlite_autoindex_${name}_`)) {
                         // auto-index
                         // TODO support this
@@ -443,21 +444,94 @@ export class Database {
             return idx
         })
 
+        const index = where ? await this.findIndex(tableName, where.column) : undefined;
+
         const values: ColumnValue[][] = [];
-        await this.scanTable(schema.rootPage, (leafPage: Page) => {
-            for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
-                const cellValues = this.readTableLeafCellColumns(leafPage, cellIdx, columnIndicies, integerPrimaryKeyColIndex);
-                if (where) {
-                    // Last column is for filtering
-                    const whereValue = cellValues[cellValues.length - 1];
-                    if (whereValue !== where.value) {
-                        continue;
+        if (where && index) {
+            const rowids = await this.searchIndex(index.rootPage, where?.value);
+            console.log(`Found index ${index!.name} for filter ${where?.column}. Rowids: `, rowids);
+            for (const searchRowid of rowids) {
+                const _binSearch = async (pageNumber: number) => {
+                    const page = await this.readPage(pageNumber);
+                    if (page.header.pageType === PageType.LeafTable) {
+                        let left = 0, right = page.header.numCells - 1;
+                        while (left <= right) {
+                            const mid = Math.floor((left + right) / 2);
+                            const cellAddr = page.dataView.getUint16(page.startBody + mid * 2);
+                            const [payloadSize, rowidAddr] = readVarInt(page.dataView, cellAddr);
+                            const [rowid, _] = readVarInt(page.dataView, rowidAddr);
+                            // console.log(`bin search page ${pageNumber} (leaf) for rid ${searchRowid}: l, r, m, rid`, left, right, mid, rowid);
+                            if (rowid === searchRowid) {
+                                const cellValues = this.readTableLeafCellColumns(page, mid, columnIndicies, integerPrimaryKeyColIndex);
+                                if (where) {
+                                    cellValues.pop();
+                                }
+                                // console.log(`  => found it!`, cellValues)
+                                values.push(cellValues);
+                                break;
+                            } else if (rowid > searchRowid!) {
+                                right = mid - 1;
+                            } else {
+                                left = mid + 1;
+                            }
+                        }
+                    } else if (page.header.pageType === PageType.InteriorTable) {
+                        let left = 0, right = page.header.numCells - 1;
+                        let notFoundMidLeftChildPageNumber = undefined;
+                        while (left <= right) {
+                            const mid = Math.floor((left + right) / 2);
+                            const cellAddr = page.dataView.getUint16(page.startBody + mid * 2);
+                            const leftChildPageNumber = page.dataView.getUint32(cellAddr);
+                            const [rowid, _] = readVarInt(page.dataView, cellAddr + 4);
+                            // console.log(`bin search page ${pageNumber} (interior) for rid ${searchRowid}: l, r, m, rid`, left, right, mid, rowid);
+
+                            notFoundMidLeftChildPageNumber = undefined;
+                            if (rowid === searchRowid) {
+                                await _binSearch(leftChildPageNumber);
+                                break;
+                            } else if (rowid > searchRowid!) {
+                                right = mid - 1;
+                                notFoundMidLeftChildPageNumber = leftChildPageNumber;
+                                // console.log(`  => moved right to ${right}, may go left pointer of ${mid} to ${notFoundMidLeftChildPageNumber}`)
+                            } else {
+                                left = mid + 1;
+                                notFoundMidLeftChildPageNumber = page.dataView.getUint32(page.dataView.getUint16(page.startBody + left * 2));;
+                                // console.log(`  => moved left to ${left}, may go left pointer of ${left} to ${notFoundMidLeftChildPageNumber}`)
+                            }
+                            // console.log(`  => l, r`, left, right)
+                        }
+                        if (notFoundMidLeftChildPageNumber) {
+                            if (right === page.header.numCells - 1) {
+                                // console.log(`  => go right to ${page.header.rightMostPointer}`)
+                                await _binSearch(page.header.rightMostPointer!);
+                            } else {
+                                // console.log(`  => go left to ${notFoundMidLeftChildPageNumber}`)
+                                await _binSearch(notFoundMidLeftChildPageNumber);
+                            }
+                        }
+                    } else {
+                        throw new Error(`Invalid page type encountered: page ${pageNumber} is of type ${page.header.pageType}, expected a table page`);
                     }
-                    cellValues.pop();
                 }
-                values.push(cellValues);
+        
+                await _binSearch(schema.rootPage);
             }
-        })
+        } else {
+            await this.scanTable(schema.rootPage, (leafPage: Page) => {
+                for (let cellIdx = 0; cellIdx < leafPage.header.numCells; cellIdx++) {
+                    const cellValues = this.readTableLeafCellColumns(leafPage, cellIdx, columnIndicies, integerPrimaryKeyColIndex);
+                    if (where) {
+                        // Last column is for filtering
+                        const whereValue = cellValues[cellValues.length - 1];
+                        if (whereValue !== where.value) {
+                            continue;
+                        }
+                        cellValues.pop();
+                    }
+                    values.push(cellValues);
+                }
+            })
+        }
 
         return values;
     }

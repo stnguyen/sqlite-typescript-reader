@@ -154,6 +154,13 @@ describe("companies.db", async () => {
     ])
     db.close();
   })
+
+  test("get multi column values with where clause", async () => {
+    const db = await Database.open(DB_PATH);
+    const values = await db.select("companies", ["id", "name"], { column: "country", operator: "=", value: "montserrat" });
+    expect(values.sort()).toEqual([[288999, "government of montserrat"], [4472846, "university of science, arts & technology"], [5316703, "the abella group llc"]]);
+    db.close();
+  })
 })
 
 describe("Chinook_Sqlite.sqlite", async () => {
