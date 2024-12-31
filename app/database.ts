@@ -119,10 +119,10 @@ function readColumnValue(serialTypeWithSize: SerialTypeWithSize, dataView: DataV
             return dataView.getInt16(byteOffset);
         case SerialType.Int24:
             // Read the three bytes as unsigned
-            const int24 = 
-            (dataView.getUint8(byteOffset) << 16) | 
-            (dataView.getUint8(byteOffset + 1) << 8) | 
-            dataView.getUint8(byteOffset + 2);
+            const int24 =
+                (dataView.getUint8(byteOffset) << 16) |
+                (dataView.getUint8(byteOffset + 1) << 8) |
+                dataView.getUint8(byteOffset + 2);
 
             // Convert to signed 24-bit integer
             return (int24 & 0x800000) ? int24 | 0xFF000000 : int24;
@@ -278,12 +278,12 @@ export class Database {
      */
     async searchIndex(indexRootPage: number, searchValue: ColumnValue): Promise<number[]> {
         /**
-         * Read a leaf page and returns relevant data
+         * Read an index cell and returns relevant data
          * @param page the index page
          * @param cellIdx index of the cell
-         * @param searchValue extract rowid if searchValue is found
+         * @param searchValue extract rowid if searchValue is matched
          */
-        function _readLeafPage(page: Page, cellIdx: number, searchValue: ColumnValue): { leftChildPageNumber?: number, colValue: ColumnValue, rowid?: number } {
+        function _readIndexCell(page: Page, cellIdx: number, searchValue: ColumnValue): { leftChildPageNumber?: number, colValue: ColumnValue, rowid?: number } {
             const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
             const leftChildPageNumber = (page.header.pageType === PageType.InteriorIndex) ? page.dataView.getUint32(cellAddr) : undefined;
 
@@ -300,7 +300,7 @@ export class Database {
 
             const [rowidSerialType, _] = readVarInt(page.dataView, rowidSerialTypeAddr);
             const rowidSerialTypeWithSize = parseSerialTypeCode(rowidSerialType);
-            const rowid = readColumnValue(rowidSerialTypeWithSize, page.dataView, byteOffset + colSerialTypeWithSize.size) as number; 
+            const rowid = readColumnValue(rowidSerialTypeWithSize, page.dataView, byteOffset + colSerialTypeWithSize.size) as number;
             return { colValue, rowid, leftChildPageNumber }
         }
 
@@ -312,23 +312,20 @@ export class Database {
             }
 
             let left = 0, right = page.header.numCells - 1;
-            let notFoundMidLeftChildPageNumber = undefined;
             while (left <= right) {
                 const mid = Math.floor((left + right) / 2);
-                const { colValue, rowid, leftChildPageNumber } = _readLeafPage(page, mid, searchValue);
-                notFoundMidLeftChildPageNumber = leftChildPageNumber;
-                // console.log(`bin search page ${pageNumber} (${page.header.pageType === PageType.InteriorIndex ? 'interior' : 'leaf'}): l, r, m, v, rid`, left, right, mid, colValue, rowid);
+                const { colValue, rowid, leftChildPageNumber } = _readIndexCell(page, mid, searchValue);
+                // console.log(`bin search page ${pageNumber} (${page.header.pageType === PageType.InteriorIndex ? 'interior' : 'leaf'}): (l ${left}, r ${right}) => m ${mid} => (v "${colValue}", rid ${rowid})`);
                 if (rowid) {
-                    notFoundMidLeftChildPageNumber = undefined;
                     // Matched with searchValue
                     result.push(rowid);
                     // console.log(`   => found: at ${mid}: ${rowid}`)
                     leftChildPageNumber && await _binSearch(leftChildPageNumber);
-                    
+
                     // Before and after cells can also have the same value
                     let runningIdx = mid - 1;
                     while (runningIdx >= left) {
-                        const { rowid, leftChildPageNumber } = _readLeafPage(page, runningIdx, searchValue);
+                        const { rowid, leftChildPageNumber } = _readIndexCell(page, runningIdx, searchValue);
                         if (!rowid) {
                             break;
                         }
@@ -339,7 +336,7 @@ export class Database {
                     }
                     runningIdx = mid + 1;
                     while (runningIdx <= right) {
-                        const { rowid, leftChildPageNumber } = _readLeafPage(page, runningIdx, searchValue);
+                        const { rowid, leftChildPageNumber } = _readIndexCell(page, runningIdx, searchValue);
                         if (!rowid) {
                             leftChildPageNumber && await _binSearch(leftChildPageNumber);
                             break;
@@ -351,26 +348,43 @@ export class Database {
                     }
 
                     break;
+                } else if (left === right - 1) {
+                    if (colValue! > searchValue!) {
+                        if (leftChildPageNumber) {
+                            // console.log(`  => v ${colValue} > searchValue ${searchValue} and mid === left => dig into left child page ${leftChildPageNumber}`);
+                            await _binSearch(leftChildPageNumber);
+                        }
+                        break;
+                    } else {
+                        left = mid + 1;
+                        // console.log(`  => v ${colValue} < searchValue ${searchValue} => set l = ${left}`);
+                    }
+                } else if (left === right) {
+                    // console.log(`  => already checked last cell, no match at all`)
+                    if (colValue! > searchValue!) {
+                        if (leftChildPageNumber) {
+                            // console.log(`  => go left child to ${leftChildPageNumber}`)
+                            await _binSearch(leftChildPageNumber);
+                        }
+                    } else {
+                        if (right === page.header.numCells - 1) {
+                            // console.log(`  => go right child to ${page.header.rightMostPointer}`)
+                            await _binSearch(page.header.rightMostPointer!);
+                        }
+                    }
+                    break;
                 } else if (colValue! > searchValue!) {
-                    right = mid - 1;
+                    right = mid;
+                    // console.log(`  => v ${colValue} > searchValue ${searchValue} => set r = ${right}`);
                 } else {
                     left = mid + 1;
-                }
-                // console.log(`  => l, r`, left, right)
-            }
-            if (page.header.pageType === PageType.InteriorIndex) {
-                if (right === page.header.numCells - 1) {
-                    // console.log(`  => go to right child`)
-                    await _binSearch(page.header.rightMostPointer!);
-                } else if (notFoundMidLeftChildPageNumber) {
-                    // console.log(`  => go to mid left child`)
-                    await _binSearch(notFoundMidLeftChildPageNumber);
+                    // console.log(`  => v ${colValue} < searchValue ${searchValue} => set l = ${left}`);
                 }
             }
         }
 
         await _binSearch(indexRootPage);
-        
+
         const sorted = result.sort((a, b) => a - b);
         return sorted;
     }
@@ -386,7 +400,6 @@ export class Database {
                     SqliteSchemaColumnIndices.rootpage_3,
                     SqliteSchemaColumnIndices.sql_4]) as [string, string, string, number, string];
                 if (type === "index" && tbl_name === tableName) {
-                    console.log(`See index of ${tbl_name}`, type, name, rootPage, sql)
                     if (name.startsWith(`sqlite_autoindex_${name}_`)) {
                         // auto-index
                         // TODO support this
@@ -431,7 +444,7 @@ export class Database {
         if (where && where.operator !== '=') {
             throw new Error(`where.operator is not supported: ${where.operator}`)
         }
-        
+
         const schema = await this.readSchema(tableName);
         const { columns: schemaColumns, integerPrimaryKeyColIndex } = parseTableSchemaSQL(schema.sql);
         const readingColumns = where ? [...columnNames, where.column] : columnNames;
@@ -449,7 +462,7 @@ export class Database {
         const values: ColumnValue[][] = [];
         if (where && index) {
             const rowids = await this.searchIndex(index.rootPage, where?.value);
-            console.log(`Found index ${index!.name} for filter ${where?.column}. Rowids: `, rowids);
+            // console.log(`Found index ${index!.name} for filter ${where?.column}. Rowids: `, rowids);
             for (const searchRowid of rowids) {
                 const _binSearch = async (pageNumber: number) => {
                     const page = await this.readPage(pageNumber);
@@ -513,7 +526,7 @@ export class Database {
                         throw new Error(`Invalid page type encountered: page ${pageNumber} is of type ${page.header.pageType}, expected a table page`);
                     }
                 }
-        
+
                 await _binSearch(schema.rootPage);
             }
         } else {
