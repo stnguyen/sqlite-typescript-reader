@@ -118,11 +118,16 @@ function readColumnValue(serialTypeWithSize: SerialTypeWithSize, dataView: DataV
         case SerialType.Int16:
             return dataView.getInt16(byteOffset);
         case SerialType.Int24:
-            return (dataView.getInt16(byteOffset) << 8) + (dataView.getInt8(byteOffset + 2))
+            // Read the three bytes as unsigned
+            const int24 = 
+            (dataView.getUint8(byteOffset) << 16) | 
+            (dataView.getUint8(byteOffset + 1) << 8) | 
+            dataView.getUint8(byteOffset + 2);
+
+            // Convert to signed 24-bit integer
+            return (int24 & 0x800000) ? int24 | 0xFF000000 : int24;
         case SerialType.Int32:
             return dataView.getInt32(byteOffset);
-        case SerialType.Int48:
-            return (dataView.getInt32(byteOffset) << 16) + (dataView.getInt16(byteOffset + 4))
         case SerialType.Float:
             return dataView.getFloat64(byteOffset);
         case SerialType.String:
@@ -272,6 +277,33 @@ export class Database {
      * @returns rowids
      */
     async searchIndex(indexRootPage: number, searchValue: ColumnValue): Promise<number[]> {
+        /**
+         * Read a leaf page and returns relevant data
+         * @param page the index page
+         * @param cellIdx index of the cell
+         * @param searchValue extract rowid if searchValue is found
+         */
+        function _readLeafPage(page: Page, cellIdx: number, searchValue: ColumnValue): { leftChildPageNumber?: number, colValue: ColumnValue, rowid?: number } {
+            const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+            const leftChildPageNumber = (page.header.pageType === PageType.InteriorIndex) ? page.dataView.getUint32(cellAddr) : undefined;
+
+            const [payloadSize, payloadAddr] = readVarInt(page.dataView, cellAddr + (page.header.pageType === PageType.InteriorIndex ? 4 : 0));
+            const [payloadHeaderSize, colSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
+
+            const byteOffset = payloadAddr + payloadHeaderSize;
+            const [colSerialType, rowidSerialTypeAddr] = readVarInt(page.dataView, colSerialTypeAddr);
+            const colSerialTypeWithSize = parseSerialTypeCode(colSerialType);
+            const colValue = readColumnValue(colSerialTypeWithSize, page.dataView, byteOffset);
+            if (colValue !== searchValue) {
+                return { colValue, leftChildPageNumber }
+            }
+
+            const [rowidSerialType, _] = readVarInt(page.dataView, rowidSerialTypeAddr);
+            const rowidSerialTypeWithSize = parseSerialTypeCode(rowidSerialType);
+            const rowid = readColumnValue(rowidSerialTypeWithSize, page.dataView, byteOffset + colSerialTypeWithSize.size) as number; 
+            return { colValue, rowid, leftChildPageNumber }
+        }
+
         const result: number[] = [];
         const _binSearch = async (pageNumber: number) => {
             const page = await this.readPage(pageNumber);
@@ -279,41 +311,68 @@ export class Database {
                 throw new Error(`Invalid page type encountered: page ${pageNumber} is of type ${page.header.pageType}, expected an index page`);
             }
 
-            // TODO implement bin search, not this dumb linear scan
-            for (let cellIdx = 0; cellIdx < page.header.numCells; cellIdx++) {
-                const cellAddr = page.dataView.getUint16(page.startBody + cellIdx * 2);
+            let left = 0, right = page.header.numCells - 1;
+            let notFoundMidLeftChildPageNumber = undefined;
+            while (left <= right) {
+                const mid = Math.floor((left + right) / 2);
+                const { colValue, rowid, leftChildPageNumber } = _readLeafPage(page, mid, searchValue);
+                notFoundMidLeftChildPageNumber = leftChildPageNumber;
+                // console.log(`bin search page ${pageNumber} (${page.header.pageType === PageType.InteriorIndex ? 'interior' : 'leaf'}): l, r, m, v, rid`, left, right, mid, colValue, rowid);
+                if (rowid) {
+                    notFoundMidLeftChildPageNumber = undefined;
+                    // Matched with searchValue
+                    result.push(rowid);
+                    // console.log(`   => found: at ${mid}: ${rowid}`)
+                    leftChildPageNumber && await _binSearch(leftChildPageNumber);
+                    
+                    // Before and after cells can also have the same value
+                    let runningIdx = mid - 1;
+                    while (runningIdx >= left) {
+                        const { rowid, leftChildPageNumber } = _readLeafPage(page, runningIdx, searchValue);
+                        if (!rowid) {
+                            break;
+                        }
+                        result.push(rowid);
+                        // console.log(`   => also to the left ${runningIdx}: ${rowid}, and dig into left child page ${leftChildPageNumber}`)
+                        leftChildPageNumber && await _binSearch(leftChildPageNumber);
+                        runningIdx -= 1;
+                    }
+                    runningIdx = mid + 1;
+                    while (runningIdx <= right) {
+                        const { rowid, leftChildPageNumber } = _readLeafPage(page, runningIdx, searchValue);
+                        if (!rowid) {
+                            leftChildPageNumber && await _binSearch(leftChildPageNumber);
+                            break;
+                        }
+                        result.push(rowid);
+                        // console.log(`   => also to the right ${runningIdx}: ${rowid}, and dig into left child page ${leftChildPageNumber}`)
+                        leftChildPageNumber && await _binSearch(leftChildPageNumber);
+                        runningIdx += 1;
+                    }
 
-                const [payloadSize, payloadAddr] = readVarInt(page.dataView, cellAddr + (page.header.pageType === PageType.InteriorIndex ? 4 : 0));
-                const [payloadHeaderSize, colSerialTypeAddr] = readVarInt(page.dataView, payloadAddr);
-
-                let byteOffset = payloadAddr + payloadHeaderSize;
-                const [colSerialType, rowidSerialTypeAddr] = readVarInt(page.dataView, colSerialTypeAddr);
-                const colSerialTypeWithSize = parseSerialTypeCode(colSerialType);
-                const colValue = readColumnValue(colSerialTypeWithSize, page.dataView, byteOffset);
-                byteOffset += colSerialTypeWithSize.size;
-
-                if (colValue === searchValue) {
-                    const [rowidSerialType, _] = readVarInt(page.dataView, rowidSerialTypeAddr);
-                    const rowidSerialTypeWithSize = parseSerialTypeCode(rowidSerialType);
-                    const rowid = readColumnValue(rowidSerialTypeWithSize, page.dataView, byteOffset); 
-                    result.push(rowid as number);
+                    break;
+                } else if (colValue! > searchValue!) {
+                    right = mid - 1;
+                } else {
+                    left = mid + 1;
                 }
-
-                if (page.header.pageType === PageType.InteriorIndex) {
-                    const leftChildPageNumber = page.dataView.getUint32(cellAddr);
-
-                    await _binSearch(leftChildPageNumber);
-                }
+                // console.log(`  => l, r`, left, right)
             }
-
             if (page.header.pageType === PageType.InteriorIndex) {
-                await _binSearch(page.header.rightMostPointer!)
+                if (right === page.header.numCells - 1) {
+                    // console.log(`  => go to right child`)
+                    await _binSearch(page.header.rightMostPointer!);
+                } else if (notFoundMidLeftChildPageNumber) {
+                    // console.log(`  => go to mid left child`)
+                    await _binSearch(notFoundMidLeftChildPageNumber);
+                }
             }
         }
 
         await _binSearch(indexRootPage);
         
-        return result;
+        const sorted = result.sort((a, b) => a - b);
+        return sorted;
     }
 
     async findIndex(tableName: string, columnName: string): Promise<Schema | undefined> {
