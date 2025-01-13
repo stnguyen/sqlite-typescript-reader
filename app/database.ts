@@ -1,7 +1,8 @@
 import { open } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { constants } from 'fs';
-import { decodeString, parseIndexSchemaSQL, parseTableSchemaSQL as parseTableSchemaSQL, readVarInt } from './utils';
+import { decodeString, readVarInt } from './utils';
+import { parseIndexSchemaSQL, parseTableSchemaSQL } from './parsers';
 
 interface DatabaseHeader {
     pageSize: number
