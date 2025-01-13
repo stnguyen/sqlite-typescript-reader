@@ -1,8 +1,8 @@
-import { describe, it, expect } from "bun:test";
-import { readVarInt } from "../app/utils";
+import { describe, test, expect } from "bun:test";
+import { readVarInt, readSerialTypeCode, SerialType } from "../app/utils";
 
 describe("readVarInt", () => {
-  it("should correctly decode a single-byte varint", () => {
+  test("should correctly decode a single-byte varint", () => {
     const buffer = new ArrayBuffer(10);
     const dataView = new DataView(buffer);
 
@@ -20,7 +20,7 @@ describe("readVarInt", () => {
     expect(offset2).toBe(2);
   });
 
-  it("should correctly decode a 2-byte varint", () => {
+  test("should correctly decode a 2-byte varint", () => {
     const buffer = new ArrayBuffer(10);
     const dataView = new DataView(buffer);
 
@@ -35,7 +35,7 @@ describe("readVarInt", () => {
     expect(value).toBe(128);
     expect(nextOffset).toBe(2);
   });
-  it("should correctly decode a 3-byte varint", () => {
+  test("should correctly decode a 3-byte varint", () => {
     const buffer = new ArrayBuffer(10);
     const dataView = new DataView(buffer);
 
@@ -51,4 +51,81 @@ describe("readVarInt", () => {
     expect(value).toBe(123456);
     expect(nextOffset).toBe(3);
   })
+});
+
+
+describe('readSerialTypeCode', () => {
+  test('should correctly parse NULL type', () => {
+    const result = readSerialTypeCode(0);
+    expect(result).toEqual({ type: SerialType.Null, size: 0 });
+  });
+
+  test('should correctly parse 8-bit signed integer', () => {
+    const result = readSerialTypeCode(1);
+    expect(result).toEqual({ type: SerialType.Int8, size: 1 });
+  });
+
+  test('should correctly parse 16-bit signed integer', () => {
+    const result = readSerialTypeCode(2);
+    expect(result).toEqual({ type: SerialType.Int16, size: 2 });
+  });
+
+  test('should correctly parse 24-bit signed integer', () => {
+    const result = readSerialTypeCode(3);
+    expect(result).toEqual({ type: SerialType.Int24, size: 3 });
+  });
+
+  test('should correctly parse 32-bit signed integer', () => {
+    const result = readSerialTypeCode(4);
+    expect(result).toEqual({ type: SerialType.Int32, size: 4 });
+  });
+
+  test('should correctly parse 48-bit signed integer', () => {
+    const result = readSerialTypeCode(5);
+    expect(result).toEqual({ type: SerialType.Int48, size: 6 });
+  });
+
+  test('should correctly parse 64-bit signed integer', () => {
+    const result = readSerialTypeCode(6);
+    expect(result).toEqual({ type: SerialType.Int64, size: 8 });
+  });
+
+  test('should correctly parse 64-bit floating point number', () => {
+    const result = readSerialTypeCode(7);
+    expect(result).toEqual({ type: SerialType.Float, size: 8 });
+  });
+
+  test('should correctly parse constant 0', () => {
+    const result = readSerialTypeCode(8);
+    expect(result).toEqual({ type: SerialType.Const0, size: 0 });
+  });
+
+  test('should correctly parse constant 1', () => {
+    const result = readSerialTypeCode(9);
+    expect(result).toEqual({ type: SerialType.Const1, size: 0 });
+  });
+
+  test('should correctly parse BLOB type', () => {
+    const result = readSerialTypeCode(12);
+    expect(result).toEqual({ type: SerialType.BLOB, size: 0 });
+  });
+
+  test('should correctly parse String type', () => {
+    const result = readSerialTypeCode(13);
+    expect(result).toEqual({ type: SerialType.String, size: 0 });
+  });
+
+  test('should correctly parse larger BLOB type', () => {
+    const result = readSerialTypeCode(14);
+    expect(result).toEqual({ type: SerialType.BLOB, size: 1 });
+  });
+
+  test('should correctly parse larger String type', () => {
+    const result = readSerialTypeCode(15);
+    expect(result).toEqual({ type: SerialType.String, size: 1 });
+  });
+
+  test('should throw an error for invalid serial type code', () => {
+    expect(() => readSerialTypeCode(10)).toThrow('Invalid serial type code: 10');
+  });
 });

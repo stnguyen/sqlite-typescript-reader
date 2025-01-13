@@ -1,8 +1,8 @@
-import { describe, it, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { parseTableSchemaSQL, parseIndexSchemaSQL } from "../app/parsers";
 
 describe("parseTableSchemaSQL", () => {
-  it("sample.db > apples", () => {
+  test("sample.db > apples", () => {
     const parsed = parseTableSchemaSQL(`
       CREATE TABLE apples
       (
@@ -16,7 +16,7 @@ describe("parseTableSchemaSQL", () => {
     expect(parsed.autoIndexColumnToNMap).toEqual(new Map([["name", 1]]))
   })
 
-  it("Chinook_Sqlite.sqlite > Customer", () => {
+  test("Chinook_Sqlite.sqlite > Customer", () => {
     expect(parseTableSchemaSQL(`
 CREATE TABLE [Customer]
 (
@@ -40,13 +40,13 @@ CREATE TABLE [Customer]
 `).columns).toEqual(["CustomerId", "FirstName", "LastName", "Company", "Address", "City", "State", "Country", "PostalCode", "Phone", "Fax", "Email", "SupportRepId"])
   })
 
-  it("generated", () => {
+  test("generated", () => {
     expect(parseTableSchemaSQL(`
 CREATE TABLE apples (id integer primary key autoincrement, name text,   color text);
 `).columns).toEqual(["id", "name", "color"])
   })
 
-  it("superheroes", () => {
+  test("superheroes", () => {
     expect(parseTableSchemaSQL(`
 CREATE TABLE "superheroes" (id integer primary key autoincrement, name text not null, eye_color text, hair_color text, appearance_count integer, first_appearance text, first_appearance_year text)
 `).columns).toEqual(["id", "name", "eye_color", "hair_color", "appearance_count", "first_appearance", "first_appearance_year"])
@@ -55,7 +55,7 @@ CREATE TABLE "superheroes" (id integer primary key autoincrement, name text not 
 
 
 describe("parseIndexSchemaSQL", () => {
-  it("companies", () => {
+  test("companies", () => {
     expect(parseIndexSchemaSQL(`
 CREATE INDEX idx_companies_country
         on companies (country);
