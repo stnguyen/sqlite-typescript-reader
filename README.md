@@ -1,6 +1,4 @@
-[![progress-banner](https://backend.codecrafters.io/progress/sqlite/a32c983f-852f-4351-9b72-de0b2f7747ca)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
-
-Educational project to understand SQLite internal file format. The project is designed by [codecrafters](https://app.codecrafters.io/r/elegant-shark-164662) (referral link).
+Educational project to understand SQLite internal file format. The challenge was designed by codecrafters.io
 
 # Usage
 
